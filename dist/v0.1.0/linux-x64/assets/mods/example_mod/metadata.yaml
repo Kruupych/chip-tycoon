@@ -1,0 +1,12 @@
+id: example_mod
+name: Example Mod — Photoresist Shock
+version: "0.1.0"
+engine_schema_version: 1
+compat: ">=0.1.0"
+hooks:
+  - time_trigger
+time_effect:
+  start: "1998-01-01"
+  months: 6
+  cost_pct: 15.0
+  yield_delta: -0.02
