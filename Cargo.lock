@@ -2455,6 +2455,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "proptest",
+ "rust_decimal",
+ "serde",
+ "serde_yaml",
  "sim-core",
  "sim-econ",
  "tracing",

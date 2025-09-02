@@ -9,6 +9,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 sim-core = { path = "../sim-core" }
 sim-econ = { path = "../sim-econ" }
+serde = { workspace = true }
+serde_yaml = "0.9"
+rust_decimal = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
