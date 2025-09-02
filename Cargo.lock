@@ -1292,7 +1292,9 @@ name = "sim-runtime"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "chrono",
  "criterion",
+ "rust_decimal",
  "sim-ai",
  "sim-core",
  "sim-econ",

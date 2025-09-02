@@ -81,12 +81,32 @@ fn main() -> Result<()> {
 
     let world = minimal_world();
     validate_world(&world)?;
+    let n_companies = world.companies.len();
+    let n_nodes = world.tech_tree.len();
+    let n_segments = world.segments.len();
+
+    let months = years.unwrap_or(0) * 12;
+    let cfg = SimConfig {
+        tick_days: 30,
+        rng_seed: 42,
+    };
+    let ecs_world = sim_runtime::init_world(world, cfg);
+    let snap = sim_runtime::run_months(ecs_world, months);
 
     println!(
         "World OK | companies: {} | tech nodes: {} | segments: {}",
-        world.companies.len(),
-        world.tech_tree.len(),
-        world.segments.len()
+        n_companies, n_nodes, n_segments
+    );
+    println!(
+        "KPI | months: {} | revenue: ${} | profit: ${} | share: {:.1}% | R&D: {:.1}% | output: {} | defects: {} | inv: {}",
+        snap.months_run,
+        snap.revenue_usd,
+        snap.profit_usd,
+        snap.market_share * 100.0,
+        snap.rd_progress * 100.0,
+        snap.output_units,
+        snap.defect_units,
+        snap.inventory_units
     );
 
     Ok(())

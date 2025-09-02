@@ -10,6 +10,8 @@ bevy_ecs = { workspace = true }
 sim-core = { path = "../sim-core" }
 sim-econ = { path = "../sim-econ" }
 sim-ai = { path = "../sim-ai" }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
