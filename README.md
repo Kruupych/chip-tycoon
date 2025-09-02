@@ -30,6 +30,7 @@ Chip Tycoon — экономико-технологический симулят
 - Все крейты компилируются с `#![deny(warnings)]`.
 - Для моддинга выбран Rhai (pure Rust, проще sandbox), Lua может быть добавлен позже.
 - В CI проверяются fmt, clippy и тесты.
+ - Артефакты рантайма (saves/, telemetry/, *.db) игнорируются git.
 
 Telemetry
 
