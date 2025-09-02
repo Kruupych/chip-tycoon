@@ -127,3 +127,13 @@ Balance regression tests
 - Linux:
   - Зависимости Tauri: WebKitGTK (например, `libwebkit2gtk-4.1-dev`), `libayatana-appindicator3-dev`, `libgtk-3-dev`, `libssl-dev` (имена зависят от дистрибутива).
   - Wayland: проверьте поддержку WebKitGTK; при проблемах рендера выставьте `WEBKIT_DISABLE_COMPOSITING_MODE=1`.
+
+## License
+
+Dual-licensed under MIT or Apache-2.0 at your option.
+- See `LICENSE-MIT` and `LICENSE-APACHE` in the repository root.
+
+## Third-party notices
+
+- Bevy, Rhai, SQLx, Tauri and other dependencies are used under their respective licenses.
+- See each crate’s license for details.
