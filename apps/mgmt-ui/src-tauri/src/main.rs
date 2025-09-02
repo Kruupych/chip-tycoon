@@ -668,6 +668,7 @@ fn main() {
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_export_campaign])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -872,6 +873,44 @@ fn sim_set_autosave(on: bool) -> Result<(), String> {
     let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
     st.autosave = on;
     Ok(())
+}
+
+#[tauri::command]
+fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), String> {
+    let mut g = SIM_STATE.write().unwrap();
+    let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    // Determine months remaining until campaign end if present, else export 24 months
+    let months = if let Some(cfg) = st.world.get_resource::<runtime::CampaignScenarioRes>() {
+        let today = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
+        let end = cfg.end;
+        ((end.year() - today.year()) * 12 + (end.month() as i32 - today.month() as i32)).max(0) as u32
+    } else { 24 };
+    if months == 0 { return Err("no months to simulate".into()); }
+    #[derive(serde::Serialize)]
+    struct Row { date: String, month_index: u32, cash_cents: i64, revenue_cents: i64, cogs_cents: i64, profit_cents: i64, asp_cents: i64, unit_cost_cents: i64, share: f32, output_units: u64, inventory_units: u64 }
+    let mut rows: Vec<Row> = Vec::with_capacity(months as usize);
+    for _ in 0..months {
+        let (_s, _t) = runtime::run_months_in_place(&mut st.world, 1);
+        let dom = st.world.resource::<runtime::DomainWorld>();
+        let stats = st.world.resource::<runtime::Stats>();
+        let pricing = st.world.resource::<runtime::Pricing>();
+        let date = dom.0.macro_state.date;
+        rows.push(Row { date: date.to_string(), month_index: stats.months_run, cash_cents: persistence::decimal_to_cents_i64(dom.0.companies[0].cash_usd).unwrap_or(0), revenue_cents: persistence::decimal_to_cents_i64(stats.revenue_usd).unwrap_or(0), cogs_cents: persistence::decimal_to_cents_i64(stats.cogs_usd).unwrap_or(0), profit_cents: persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0), asp_cents: persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0), unit_cost_cents: persistence::decimal_to_cents_i64(pricing.unit_cost_usd).unwrap_or(0), share: stats.market_share, output_units: stats.output_units, inventory_units: stats.inventory_units });
+    }
+    if path.ends_with(".json") || format.as_deref() == Some("json") {
+        if let Some(parent) = std::path::Path::new(&path).parent() { let _ = std::fs::create_dir_all(parent); }
+        let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
+        std::fs::write(&path, s).map_err(|e| e.to_string())?;
+        return Ok(());
+    } else if path.ends_with(".parquet") || format.as_deref() == Some("parquet") {
+        let mut trows: Vec<persistence::TelemetryRow> = Vec::with_capacity(rows.len());
+        for r in rows.iter() {
+            trows.push(persistence::TelemetryRow { month_index: r.month_index, output_units: r.output_units, sold_units: 0, asp_cents: r.asp_cents, unit_cost_cents: r.unit_cost_cents, margin_cents: r.profit_cents, revenue_cents: r.revenue_cents });
+        }
+        persistence::write_telemetry_parquet(&path, &trows).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    Err("unknown format".into())
 }
 
 #[tauri::command]

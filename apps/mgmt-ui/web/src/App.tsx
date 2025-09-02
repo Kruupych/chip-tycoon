@@ -233,6 +233,8 @@ function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: st
 function Campaign() {
   const { stateDto } = useAppStore();
   const camp = (stateDto as any)?.campaign as any;
+  const [fmt, setFmt] = useState<"json"|"parquet">("json");
+  const [path, setPath] = useState("telemetry/campaign_export.json");
   return (
     <div>
       <h2>Campaign</h2>
@@ -245,6 +247,14 @@ function Campaign() {
             <option value="normal">Normal</option>
             <option value="hard">Hard</option>
           </select>
+        </span>
+        <span style={{ marginLeft: 12 }}>
+          <label>Export: </label>
+          <select value={fmt} onChange={(e)=>{ const f = e.target.value as any; setFmt(f); setPath(f === "json" ? "telemetry/campaign_export.json" : "telemetry/campaign_export.parquet"); }}>
+            <option value="json">JSON</option>
+            <option value="parquet">Parquet</option>
+          </select>
+          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); alert("Exported to " + path); } catch(e) { alert("Export failed: "+e); } }}>Export Report</button>
         </span>
       </div>
       {camp ? (
