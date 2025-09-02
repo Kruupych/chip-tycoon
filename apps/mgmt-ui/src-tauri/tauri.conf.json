@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chip Tycoon",
+  "identifier": "com.chiptycoon.app",
+  "version": "0.1.0",
+  "build": {
+    "beforeBuildCommand": "pnpm -C web build",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Chip Tycoon",
+        "width": 1280,
+        "height": 800
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "identifier": "com.chiptycoon.app"
+  }
+}
+
