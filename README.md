@@ -30,3 +30,16 @@ Chip Tycoon — экономико-технологический симулят
 - Все крейты компилируются с `#![deny(warnings)]`.
 - Для моддинга выбран Rhai (pure Rust, проще sandbox), Lua может быть добавлен позже.
 - В CI проверяются fmt, clippy и тесты.
+
+Telemetry
+
+`just sim` сохраняет месячную телеметрию в Parquet-файлы под `./telemetry/`.
+
+Схема (денежные значения в центах, Int64):
+- month_index: UInt32
+- output_units: UInt64
+- sold_units: UInt64
+- asp_cents: Int64
+- unit_cost_cents: Int64
+- margin_cents: Int64
+- revenue_cents: Int64

@@ -117,10 +117,10 @@ fn main() -> Result<()> {
             month_index: t.month_index,
             output_units: t.output_units,
             sold_units: t.sold_units,
-            asp_usd: t.asp_usd.to_string().parse::<f64>().unwrap_or(0.0),
-            unit_cost_usd: t.unit_cost_usd.to_string().parse::<f64>().unwrap_or(0.0),
-            margin_usd: t.margin_usd.to_string().parse::<f64>().unwrap_or(0.0),
-            revenue_usd: t.revenue_usd.to_string().parse::<f64>().unwrap_or(0.0),
+            asp_cents: persistence::decimal_to_cents_i64(t.asp_usd).unwrap_or(0),
+            unit_cost_cents: persistence::decimal_to_cents_i64(t.unit_cost_usd).unwrap_or(0),
+            margin_cents: persistence::decimal_to_cents_i64(t.margin_usd).unwrap_or(0),
+            revenue_cents: persistence::decimal_to_cents_i64(t.revenue_usd).unwrap_or(0),
         })
         .collect();
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");

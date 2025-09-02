@@ -12,6 +12,8 @@ sim-econ = { path = "../sim-econ" }
 sim-ai = { path = "../sim-ai" }
 chrono = { workspace = true }
 rust_decimal = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

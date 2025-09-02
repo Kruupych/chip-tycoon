@@ -8,6 +8,8 @@ use parquet::column::writer::ColumnWriter;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::Type;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
 use sim_core as core;
 use sqlx::{migrate::Migrator, Pool, Row, Sqlite, SqlitePool};
 use std::fs::File;
@@ -20,12 +22,12 @@ pub fn default_sqlite_url() -> &'static str {
     "sqlite://./saves/main.db"
 }
 
-static MIGRATOR: Migrator = sqlx::migrate!("../../migrations/sqlite");
+static MIGRATIONS: Migrator = sqlx::migrate!("../../migrations/sqlite");
 
 /// Initialize the SQLite database: connect and run migrations.
 pub async fn init_db(url: &str) -> Result<SqlitePool> {
     let pool = SqlitePool::connect(url).await?;
-    MIGRATOR.run(&pool).await?;
+    MIGRATIONS.run(&pool).await?;
     Ok(pool)
 }
 
@@ -103,10 +105,27 @@ pub struct TelemetryRow {
     pub month_index: u32,
     pub output_units: u64,
     pub sold_units: u64,
-    pub asp_usd: f64,
-    pub unit_cost_usd: f64,
-    pub margin_usd: f64,
-    pub revenue_usd: f64,
+    pub asp_cents: i64,
+    pub unit_cost_cents: i64,
+    pub margin_cents: i64,
+    pub revenue_cents: i64,
+}
+
+/// Convert a Decimal USD value to cents (i64), rounding to 2 decimals.
+pub fn decimal_to_cents_i64(d: Decimal) -> Result<i64> {
+    let scaled = d.round_dp(2) * Decimal::from(100u64);
+    let val = scaled
+        .to_i128()
+        .ok_or_else(|| anyhow!("non-finite decimal"))?;
+    if val < i64::MIN as i128 || val > i64::MAX as i128 {
+        return Err(anyhow!("overflow while converting to cents"));
+    }
+    Ok(val as i64)
+}
+
+/// Convert cents (i64) to Decimal USD value.
+pub fn cents_i64_to_decimal(cents: i64) -> Decimal {
+    Decimal::from_i64(cents).unwrap() / Decimal::from(100u64)
 }
 
 /// Write telemetry rows to a Parquet file at the given path.
@@ -121,16 +140,16 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
         Type::primitive_type_builder("sold_units", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
             .build()?,
-        Type::primitive_type_builder("asp_usd", PhysicalType::DOUBLE)
+        Type::primitive_type_builder("asp_cents", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
             .build()?,
-        Type::primitive_type_builder("unit_cost_usd", PhysicalType::DOUBLE)
+        Type::primitive_type_builder("unit_cost_cents", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
             .build()?,
-        Type::primitive_type_builder("margin_usd", PhysicalType::DOUBLE)
+        Type::primitive_type_builder("margin_cents", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
             .build()?,
-        Type::primitive_type_builder("revenue_usd", PhysicalType::DOUBLE)
+        Type::primitive_type_builder("revenue_cents", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
             .build()?,
     ];
@@ -156,10 +175,10 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
     let col0: Vec<i32> = rows.iter().map(|r| r.month_index as i32).collect();
     let col1: Vec<i64> = rows.iter().map(|r| r.output_units as i64).collect();
     let col2: Vec<i64> = rows.iter().map(|r| r.sold_units as i64).collect();
-    let col3: Vec<f64> = rows.iter().map(|r| r.asp_usd).collect();
-    let col4: Vec<f64> = rows.iter().map(|r| r.unit_cost_usd).collect();
-    let col5: Vec<f64> = rows.iter().map(|r| r.margin_usd).collect();
-    let col6: Vec<f64> = rows.iter().map(|r| r.revenue_usd).collect();
+    let col3: Vec<i64> = rows.iter().map(|r| r.asp_cents).collect();
+    let col4: Vec<i64> = rows.iter().map(|r| r.unit_cost_cents).collect();
+    let col5: Vec<i64> = rows.iter().map(|r| r.margin_cents).collect();
+    let col6: Vec<i64> = rows.iter().map(|r| r.revenue_cents).collect();
 
     // Column 0
     {
@@ -206,10 +225,10 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
             .next_column()?
             .ok_or_else(|| anyhow!("no column"))?;
         match col.untyped() {
-            ColumnWriter::DoubleColumnWriter(w) => {
+            ColumnWriter::Int64ColumnWriter(w) => {
                 let _ = w.write_batch(&col3, None, None)?;
             }
-            _ => return Err(anyhow!("unexpected column type for asp_usd")),
+            _ => return Err(anyhow!("unexpected column type for asp_cents")),
         }
         col.close()?;
     }
@@ -219,10 +238,10 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
             .next_column()?
             .ok_or_else(|| anyhow!("no column"))?;
         match col.untyped() {
-            ColumnWriter::DoubleColumnWriter(w) => {
+            ColumnWriter::Int64ColumnWriter(w) => {
                 let _ = w.write_batch(&col4, None, None)?;
             }
-            _ => return Err(anyhow!("unexpected column type for unit_cost_usd")),
+            _ => return Err(anyhow!("unexpected column type for unit_cost_cents")),
         }
         col.close()?;
     }
@@ -232,10 +251,10 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
             .next_column()?
             .ok_or_else(|| anyhow!("no column"))?;
         match col.untyped() {
-            ColumnWriter::DoubleColumnWriter(w) => {
+            ColumnWriter::Int64ColumnWriter(w) => {
                 let _ = w.write_batch(&col5, None, None)?;
             }
-            _ => return Err(anyhow!("unexpected column type for margin_usd")),
+            _ => return Err(anyhow!("unexpected column type for margin_cents")),
         }
         col.close()?;
     }
@@ -245,10 +264,10 @@ pub fn write_telemetry_parquet<P: AsRef<Path>>(path: P, rows: &[TelemetryRow]) -
             .next_column()?
             .ok_or_else(|| anyhow!("no column"))?;
         match col.untyped() {
-            ColumnWriter::DoubleColumnWriter(w) => {
+            ColumnWriter::Int64ColumnWriter(w) => {
                 let _ = w.write_batch(&col6, None, None)?;
             }
-            _ => return Err(anyhow!("unexpected column type for revenue_usd")),
+            _ => return Err(anyhow!("unexpected column type for revenue_cents")),
         }
         col.close()?;
     }
@@ -294,6 +313,36 @@ mod tests {
             let world2 = deserialize_world_bincode(&latest.2).unwrap();
             // Quick invariant: date preserved
             assert_eq!(world2.macro_state.date, world.macro_state.date);
+        });
+    }
+
+    #[test]
+    fn init_db_on_disk() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let base = std::path::Path::new("target/tmp_db_init");
+            std::fs::create_dir_all(base).unwrap();
+            let path = base.join("test.db");
+            let url = format!("sqlite://{}", path.display());
+            // touch the file to avoid SQLite open error on some platforms
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .append(true)
+                .open(&path)
+                .unwrap();
+            let pool = init_db(&url).await.unwrap();
+            // ensure `saves` table exists
+            let name: Option<(String,)> = sqlx::query_as(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='saves'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+            assert!(name.is_some());
         });
     }
 }

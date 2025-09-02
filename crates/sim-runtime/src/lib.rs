@@ -5,6 +5,8 @@
 //! Exposes a simple monthly tick runner with deterministic, stubbed systems.
 
 use bevy_ecs::prelude::*;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rust_decimal::Decimal;
 use sim_core as core;
 use tracing::info;
@@ -83,6 +85,10 @@ pub struct Capacity {
     pub wafers_per_month: u64,
 }
 
+/// Global RNG resource seeded from `SimConfig` for deterministic noise.
+#[derive(Resource)]
+pub struct RngResource(pub ChaCha8Rng);
+
 pub fn foundry_capacity_system(mut cap: ResMut<Capacity>, dom: Res<DomainWorld>) {
     // Deterministic dummy capacity: base on number of tech nodes and companies.
     let base = 1000u64;
@@ -136,6 +142,8 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(SimConfig(config));
     w.insert_resource(Stats::default());
     w.insert_resource(Capacity::default());
+    let rng = ChaCha8Rng::seed_from_u64(w.resource::<SimConfig>().0.rng_seed);
+    w.insert_resource(RngResource(rng));
     w
 }
 

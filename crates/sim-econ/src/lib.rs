@@ -120,11 +120,26 @@ pub fn demand_with_noise(
     if !(0.0..1.0).contains(&noise_frac) || !noise_frac.is_finite() {
         return Err(EconError::NonFinite);
     }
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    demand_with_noise_rng(base, price, ref_price, elasticity, noise_frac, &mut rng)
+}
+
+/// Same as `demand_with_noise` but uses a provided RNG for global determinism.
+pub fn demand_with_noise_rng(
+    base: u64,
+    price: Decimal,
+    ref_price: Decimal,
+    elasticity: f32,
+    noise_frac: f32,
+    rng: &mut impl Rng,
+) -> Result<u64, EconError> {
+    if !(0.0..1.0).contains(&noise_frac) || !noise_frac.is_finite() {
+        return Err(EconError::NonFinite);
+    }
     let q = demand(base, price, ref_price, elasticity)?;
     if noise_frac == 0.0 {
         return Ok(q);
     }
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let u: f32 = rng.gen_range(-noise_frac..=noise_frac);
     let factor = 1.0 + u as f64;
     let noisy = (q as f64) * factor;
@@ -232,6 +247,17 @@ mod tests {
         assert_eq!(q1, q2);
         let q3 = demand_with_noise(base, p, p, -2.0, 0.0, 1).unwrap();
         assert_eq!(q3, base);
+    }
+
+    #[test]
+    fn noise_rng_reproducible() {
+        let base = 1000;
+        let p = Decimal::new(100, 2);
+        let mut r1 = ChaCha8Rng::seed_from_u64(42);
+        let mut r2 = ChaCha8Rng::seed_from_u64(42);
+        let q1 = demand_with_noise_rng(base, p, p, -2.0, 0.1, &mut r1).unwrap();
+        let q2 = demand_with_noise_rng(base, p, p, -2.0, 0.1, &mut r2).unwrap();
+        assert_eq!(q1, q2);
     }
 
     #[test]

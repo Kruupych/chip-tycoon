@@ -10,3 +10,7 @@ serde = { workspace = true }
 rhai = { workspace = true }
 tracing = { workspace = true }
 sim-core = { path = "../sim-core" }
+serde_yaml = "0.9"
+chrono = { workspace = true }
+thiserror = { workspace = true }
+rust_decimal = { workspace = true }

@@ -31,7 +31,7 @@ run-ui:
     cd apps/mgmt-ui && pnpm i && pnpm tauri dev
 
 db-migrate:
-    sqlx migrate run --database-url sqlite://./saves/main.db
+    cargo run -p persistence --bin migrate
 
 db-repl:
     sqlite3 ./saves/main.db
