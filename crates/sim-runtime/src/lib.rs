@@ -107,11 +107,40 @@ pub struct Capacity {
 #[derive(Resource)]
 pub struct RngResource(pub ChaCha8Rng);
 
-pub fn foundry_capacity_system(mut cap: ResMut<Capacity>, dom: Res<DomainWorld>) {
-    // Deterministic dummy capacity: base on number of tech nodes and companies.
+/// Foundry capacity contracts.
+#[derive(Clone, Debug)]
+pub struct FoundryContract {
+    pub foundry_id: String,
+    pub wafers_per_month: u32,
+    pub price_per_wafer_cents: i64,
+    pub lead_time_months: u8,
+    pub start: chrono::NaiveDate,
+    pub end: chrono::NaiveDate,
+}
+
+/// Capacity book resource with active/pending contracts.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct CapacityBook {
+    pub contracts: Vec<FoundryContract>,
+}
+
+pub fn foundry_capacity_system(
+    mut cap: ResMut<Capacity>,
+    dom: Res<DomainWorld>,
+    book: Res<CapacityBook>,
+) {
+    // Base capacity from world size
     let base = 1000u64;
     let factor = (dom.0.tech_tree.len() as u64 + dom.0.companies.len() as u64).max(1);
-    cap.wafers_per_month = base * factor;
+    let mut wafers = base * factor;
+    // Add active contracts effective at current date
+    let date = dom.0.macro_state.date;
+    for c in &book.contracts {
+        if date >= c.start && date <= c.end {
+            wafers = wafers.saturating_add(c.wafers_per_month as u64);
+        }
+    }
+    cap.wafers_per_month = wafers;
     info!(target: "sim.capacity", wafers = cap.wafers_per_month, "Capacity calculated");
 }
 
@@ -281,6 +310,7 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(SimConfig(config));
     w.insert_resource(Stats::default());
     w.insert_resource(Capacity::default());
+    w.insert_resource(CapacityBook::default());
     w.insert_resource(Pricing::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
@@ -552,5 +582,51 @@ mod tests {
         };
         let snap = run_months(init_world(dom, cfg), 48);
         assert!(snap.market_share > 0.05 && snap.market_share < 0.95);
+    }
+
+    #[test]
+    fn capacity_contract_increases_after_lead_time() {
+        use chrono::Datelike;
+        let dom = core::World {
+            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            tech_tree: vec![],
+            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+        let mut w = init_world(dom.clone(), cfg);
+        // Initial capacity via schedule
+        let mut sched = bevy_ecs::schedule::Schedule::default();
+        sched.add_systems(foundry_capacity_system);
+        sched.run(&mut w);
+        let base = w.resource::<Capacity>().wafers_per_month;
+        // Add a contract with lead time 2 months (start at +2 months)
+        let start = dom.macro_state.date;
+        let (mut y, mut m) = (start.year(), start.month());
+        m += 2;
+        if m > 12 { y += 1; m -= 12; }
+        let start_plus_2 = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap();
+        {
+            let mut book = w.resource_mut::<CapacityBook>();
+            book.contracts.push(FoundryContract {
+                foundry_id: "F1".into(),
+                wafers_per_month: 500,
+                price_per_wafer_cents: 100_00,
+                lead_time_months: 2,
+                start: start_plus_2,
+                end: chrono::NaiveDate::from_ymd_opt(y + 1, m, start.day()).unwrap_or(start_plus_2),
+            });
+        }
+        // Capacity should remain base until date reaches contract.start
+        sched.run(&mut w);
+        assert_eq!(w.resource::<Capacity>().wafers_per_month, base);
+        // Advance to the start_plus_2 month
+        {
+            let mut dw = w.resource_mut::<DomainWorld>();
+            dw.0.macro_state.date = start_plus_2;
+        }
+        sched.run(&mut w);
+        // After passing start date, capacity should increase
+        assert!(w.resource::<Capacity>().wafers_per_month > base);
     }
 }
