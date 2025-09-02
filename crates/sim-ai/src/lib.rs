@@ -234,7 +234,8 @@ pub enum PlanAction {
     AdjustPriceFrac(f32), // +/- fraction of current ASP
     RequestCapacity(u64), // units/month
     AllocateRndBoost(f32), // +/- boost to R&D progress per month
-                          // ScheduleTapeout is omitted in this phase's simplified predictor
+    ScheduleTapeout { expedite: bool },
+    // ScheduleTapeout is omitted in this phase's simplified predictor
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +344,10 @@ fn apply_action(state: &mut PlannerState, action: PlanAction, cfg: &PlannerConfi
         PlanAction::AllocateRndBoost(boost) => {
             state.rd_progress = (state.rd_progress + boost).clamp(0.0, 1.0);
         }
+        PlanAction::ScheduleTapeout { expedite: _ } => {
+            // Predictor: slight near-term utility bonus to represent pipeline progress.
+            state.rd_progress = (state.rd_progress + 0.005).clamp(0.0, 1.0);
+        }
     }
 }
 
@@ -392,6 +397,7 @@ pub fn plan_horizon(
                     vec![
                         PlanAction::AdjustPriceFrac(-cfg.price_step_frac),
                         PlanAction::AdjustPriceFrac(0.0),
+                        PlanAction::ScheduleTapeout { expedite: false },
                         PlanAction::RequestCapacity(cfg.capacity_step_units),
                         PlanAction::AllocateRndBoost(0.01),
                     ]
@@ -400,6 +406,7 @@ pub fn plan_horizon(
                         PlanAction::AdjustPriceFrac(-cfg.price_step_frac),
                         PlanAction::AdjustPriceFrac(0.0),
                         PlanAction::AdjustPriceFrac(cfg.price_step_frac),
+                        PlanAction::ScheduleTapeout { expedite: false },
                         PlanAction::RequestCapacity(cfg.capacity_step_units),
                         PlanAction::AllocateRndBoost(0.01),
                     ]

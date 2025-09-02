@@ -5,6 +5,7 @@
 //! Exposes a simple monthly tick runner with deterministic, stubbed systems.
 
 use bevy_ecs::prelude::*;
+use chrono::Datelike;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
@@ -80,6 +81,14 @@ pub struct Pricing {
     pub asp_usd: Decimal,
     pub unit_cost_usd: Decimal,
 }
+
+/// Simple product appeal metric influenced by released tapeouts.
+#[derive(Resource, Default, Clone)]
+pub struct ProductAppeal(pub f32);
+
+/// Product pipeline resource wraps core pipeline.
+#[derive(Resource, Default, Clone)]
+pub struct Pipeline(pub core::ProductPipeline);
 
 impl Default for Pricing {
     fn default() -> Self {
@@ -173,6 +182,25 @@ pub fn finance_system(stats: ResMut<Stats>) {
     info!(target: "sim.finance", profit = %stats.profit_usd, "Finance tick");
 }
 
+/// Advance tapeout queue and update product appeal when products are released.
+pub fn tapeout_system(mut pipeline: ResMut<Pipeline>, mut appeal: ResMut<ProductAppeal>, dom: Res<DomainWorld>) {
+    let date = dom.0.macro_state.date;
+    let mut rest = Vec::with_capacity(pipeline.0.queue.len());
+    let mut released_spec: Option<core::ProductSpec> = None;
+    for req in pipeline.0.queue.drain(..) {
+        if req.ready <= date {
+            released_spec = Some(req.product);
+        } else {
+            rest.push(req);
+        }
+    }
+    if let Some(spec) = released_spec {
+        pipeline.0.released.push(spec);
+        appeal.0 = (appeal.0 + 0.05).clamp(0.0, 0.5);
+    }
+    pipeline.0.queue = rest;
+}
+
 /// AI configuration resource loaded from defaults.
 #[derive(Resource, Clone)]
 pub struct AiConfig(pub ai::AiConfig);
@@ -188,6 +216,7 @@ pub fn ai_strategy_system(
     cap: Res<Capacity>,
     mut pricing: ResMut<Pricing>,
     cfg: Res<AiConfig>,
+    appeal: Res<ProductAppeal>,
 ) {
     // Compute demand/supply ratio for heuristics
     let seg = dom.0.segments.first();
@@ -245,62 +274,156 @@ pub fn ai_strategy_system(
     let comp_attr = cfg.0.planner.competitor_attractiveness.max(1e-3);
     let p = pricing.asp_usd.to_f32().unwrap_or(1.0).max(0.01);
     let r = ref_price.to_f32().unwrap_or(p).max(0.01);
-    let a = (r / p).powf(beta);
+    let a = (r / p).powf(beta) * (1.0 + appeal.0.clamp(0.0, 1.0));
     let target_share = (a / (a + comp_attr)).clamp(0.05, 0.95);
     stats.market_share += (target_share - stats.market_share) * 0.1;
     stats.market_share = stats.market_share.clamp(0.05, 0.95);
 
-    // Quarterly planning signal (every 3 months)
-    if (stats.months_run + 1) % 3 == 0 {
-        let current = ai::CurrentKpis {
-            asp_usd: pricing.asp_usd,
-            unit_cost_usd: pricing.unit_cost_usd,
-            capacity_units_per_month: supply_units,
-            cash_usd: dom
-                .0
-                .companies
-                .first()
-                .map(|c| c.cash_usd)
-                .unwrap_or(Decimal::ZERO),
-            debt_usd: dom
-                .0
-                .companies
-                .first()
-                .map(|c| c.debt_usd)
-                .unwrap_or(Decimal::ZERO),
-            share: stats.market_share,
-            rd_progress: stats.rd_progress,
-        };
-        let plan = ai::plan_horizon(&dom.0, &current, &cfg.0.weights, &cfg.0.planner);
-        if let Some(first) = plan.decisions.first() {
-            match first.action {
-                ai::PlanAction::AdjustPriceFrac(df) => {
-                    let factor =
-                        rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
-                    let mut np = pricing.asp_usd * factor;
-                    let minp = pricing.unit_cost_usd
-                        * rust_decimal::Decimal::from_f32_retain(
-                            1.0 + cfg.0.tactics.min_margin_frac,
-                        )
-                        .unwrap_or(Decimal::ONE);
-                    if np < minp {
-                        np = minp;
-                    }
-                    pricing.asp_usd = np;
-                }
-                ai::PlanAction::AllocateRndBoost(db) => {
-                    stats.rd_progress = (stats.rd_progress + db).clamp(0.0, 1.0);
-                }
-                ai::PlanAction::RequestCapacity(_u) => {
-                    // No direct hook into foundry capacity in this simplified runtime.
-                }
-            }
-        }
-    }
-
+    // Quarterly planning moved to a separate system below
     // Update last_share tracker
     stats.last_share = stats.market_share;
     info!(target: "sim.ai", share = stats.market_share, asp = %pricing.asp_usd, rnd = stats.rd_progress, "AI strategy updated");
+}
+
+/// Quarterly planner integration: applies top decision to contracts/tapeouts.
+pub fn ai_quarterly_planner_system(
+    stats: Res<Stats>,
+    mut dom: ResMut<DomainWorld>,
+    mut pricing: ResMut<Pricing>,
+    cfg: Res<AiConfig>,
+    mut book: ResMut<CapacityBook>,
+    mut pipeline: ResMut<Pipeline>,
+) {
+    if (stats.months_run + 1) % 3 != 0 {
+        return;
+    }
+    // Compute approximate supply
+    let supply_units = 0u64; // not needed for planner input's capacity
+    let current = ai::CurrentKpis {
+        asp_usd: pricing.asp_usd,
+        unit_cost_usd: pricing.unit_cost_usd,
+        capacity_units_per_month: supply_units,
+        cash_usd: dom
+            .0
+            .companies
+            .first()
+            .map(|c| c.cash_usd)
+            .unwrap_or(Decimal::ZERO),
+        debt_usd: dom
+            .0
+            .companies
+            .first()
+            .map(|c| c.debt_usd)
+            .unwrap_or(Decimal::ZERO),
+        share: stats.market_share,
+        rd_progress: stats.rd_progress,
+    };
+    let plan = ai::plan_horizon(&dom.0, &current, &cfg.0.weights, &cfg.0.planner);
+    if let Some(first) = plan.decisions.first() {
+        match first.action {
+            ai::PlanAction::AdjustPriceFrac(df) => {
+                let factor = rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
+                let mut np = pricing.asp_usd * factor;
+                let minp = pricing
+                    .unit_cost_usd
+                    * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.0.tactics.min_margin_frac)
+                        .unwrap_or(Decimal::ONE);
+                if np < minp {
+                    np = minp;
+                }
+                pricing.asp_usd = np;
+            }
+            ai::PlanAction::AllocateRndBoost(_db) => {}
+            ai::PlanAction::RequestCapacity(u) => {
+                // Record a capacity contract to start after lead time
+                let lead = cfg.0.planner.quarter_step as u8; // reuse quarter step as default lead time
+                let start = dom.0.macro_state.date;
+                // add months
+                let (mut y, mut m) = (start.year(), start.month());
+                let mut add = lead as u32;
+                while add > 0 {
+                    m += 1;
+                    if m > 12 {
+                        y += 1;
+                        m = 1;
+                    }
+                    add -= 1;
+                }
+                let start_date = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(start);
+                let end_date = chrono::NaiveDate::from_ymd_opt(y + 1, m, start.day()).unwrap_or(start_date);
+                book.contracts.push(FoundryContract {
+                    foundry_id: "FND-A".into(),
+                    wafers_per_month: u as u32,
+                    price_per_wafer_cents: 10_000,
+                    lead_time_months: lead,
+                    start: start_date,
+                    end: end_date,
+                });
+            }
+            ai::PlanAction::ScheduleTapeout { expedite } => {
+                // Create a trivial product spec and push into pipeline
+                let node_id = dom
+                    .0
+                    .tech_tree
+                    .first()
+                    .map(|n| n.id.clone())
+                    .unwrap_or(core::TechNodeId("800nm".into()));
+                let spec = core::ProductSpec {
+                    kind: core::ProductKind::CPU,
+                    tech_node: node_id.clone(),
+                    microarch: core::MicroArch {
+                        ipc_index: 1.0,
+                        pipeline_depth: 10,
+                        cache_l1_kb: 64,
+                        cache_l2_mb: 1.0,
+                        chiplet: false,
+                    },
+                    die_area_mm2: 100.0,
+                    tdp_w: 65.0,
+                    bom_usd: 50.0,
+                };
+                let start = dom.0.macro_state.date;
+                let mut ready = start;
+                // Ready in 9 months baseline
+                for _ in 0..9 {
+                    let (mut y, mut m) = (ready.year(), ready.month());
+                    m += 1;
+                    if m > 12 {
+                        y += 1;
+                        m = 1;
+                    }
+                    ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready);
+                }
+                let mut expedite_cost = 0i64;
+                if expedite {
+                    // cut by 3 months with cost
+                    for _ in 0..3 {
+                        let (mut y, mut m) = (ready.year(), ready.month());
+                        if m == 1 {
+                            y -= 1;
+                            m = 12;
+                        } else {
+                            m -= 1;
+                        }
+                        ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready);
+                    }
+                    expedite_cost = 100_000; // $1,000.00
+                    if let Some(c) = dom.0.companies.first_mut() {
+                        c.cash_usd -= Decimal::new(expedite_cost, 2);
+                    }
+                }
+                let req = core::TapeoutRequest {
+                    product: spec.clone(),
+                    tech_node: node_id,
+                    start,
+                    ready,
+                    expedite,
+                    expedite_cost_cents: expedite_cost,
+                };
+                pipeline.0.queue.push(req);
+            }
+        }
+    }
 }
 
 /// Create an ECS world with required resources from a domain world and config.
@@ -312,6 +435,8 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(Capacity::default());
     w.insert_resource(CapacityBook::default());
     w.insert_resource(Pricing::default());
+    w.insert_resource(ProductAppeal::default());
+    w.insert_resource(Pipeline::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
     w.insert_resource(AiConfig(ai_cfg));
@@ -332,10 +457,12 @@ pub fn run_months_with_telemetry(
             r_and_d_system,
             foundry_capacity_system,
             production_system,
+            tapeout_system,
             // capture month-level sales metrics
             (sales_system).after(production_system),
             finance_system,
             ai_strategy_system,
+            ai_quarterly_planner_system,
         )
             .chain(),
     );
@@ -628,5 +755,48 @@ mod tests {
         sched.run(&mut w);
         // After passing start date, capacity should increase
         assert!(w.resource::<Capacity>().wafers_per_month > base);
+    }
+
+    #[test]
+    fn expedite_tapeout_reduces_ready_and_spends_cash() {
+        let dom = core::World {
+            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: Decimal::new(1,0), freq_ghz_baseline: Decimal::new(1,0), leakage_index: Decimal::new(1,0), yield_baseline: Decimal::new(9,1), wafer_cost_usd: Decimal::new(1000,0), mask_set_cost_usd: Decimal::new(5000,0), dependencies: vec![] }],
+            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(10_000_00, 2), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 7 };
+        let mut w = init_world(dom.clone(), cfg);
+        let start = dom.macro_state.date;
+        // Manually create an expedited tapeout
+        {
+            let mut pipe = w.resource_mut::<Pipeline>();
+            // Ready baseline after 9 months, expedited by 3 months
+            let mut ready = start;
+            for _ in 0..6 { let (mut y, mut m) = (ready.year(), ready.month()); m += 1; if m > 12 { y += 1; m = 1; } ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready); }
+            let spec = core::ProductSpec { kind: core::ProductKind::CPU, tech_node: core::TechNodeId("N90".into()), microarch: core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, tdp_w: 65.0, bom_usd: 50.0 };
+            pipe.0.queue.push(core::TapeoutRequest { product: spec, tech_node: core::TechNodeId("N90".into()), start, ready, expedite: true, expedite_cost_cents: 100_000 });
+        }
+        // Spend expedite cost
+        {
+            let mut dw = w.resource_mut::<DomainWorld>();
+            if let Some(c) = dw.0.companies.first_mut() { c.cash_usd -= Decimal::new(100_000, 2); }
+        }
+        // Advance date to ready
+        {
+            let mut dw = w.resource_mut::<DomainWorld>();
+            let (mut y, mut m) = (start.year(), start.month());
+            for _ in 0..6 { m += 1; if m > 12 { y += 1; m = 1; } }
+            dw.0.macro_state.date = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap();
+        }
+        // Run tapeout system
+        let mut sched = bevy_ecs::schedule::Schedule::default();
+        sched.add_systems(tapeout_system);
+        sched.run(&mut w);
+        // Released should be non-empty; appeal increased; cash decreased
+        assert!(!w.resource::<Pipeline>().0.released.is_empty());
+        assert!(w.resource::<ProductAppeal>().0 > 0.0);
+        let cash = w.resource::<DomainWorld>().0.companies.first().unwrap().cash_usd;
+        assert!(cash < Decimal::new(10_000_00, 2));
     }
 }

@@ -144,6 +144,24 @@ pub struct World {
     pub segments: Vec<MarketSegment>,
 }
 
+/// Request to tape out a product. Minimal fields to connect to runtime.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TapeoutRequest {
+    pub product: ProductSpec,
+    pub tech_node: TechNodeId,
+    pub start: NaiveDate,
+    pub ready: NaiveDate,
+    pub expedite: bool,
+    pub expedite_cost_cents: i64,
+}
+
+/// Product development pipeline with a simple queue and released products.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProductPipeline {
+    pub queue: Vec<TapeoutRequest>,
+    pub released: Vec<ProductSpec>,
+}
+
 /// Validation errors for domain invariants.
 #[derive(Debug, Error, PartialEq)]
 pub enum ValidationError {
