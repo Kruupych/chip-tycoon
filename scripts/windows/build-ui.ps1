@@ -30,10 +30,10 @@ pnpm --dir $webRoot add -D @tauri-apps/cli | Out-Null
 Write-Host "Building web frontend"
 pnpm --dir $webRoot build
 
-Write-Host "Running tauri build via pnpm dlx (from apps/mgmt-ui)"
-Push-Location $uiRoot
+Write-Host "Running tauri build via pnpm dlx (from apps/mgmt-ui/src-tauri)"
+Push-Location (Join-Path $uiRoot 'src-tauri')
 try {
-  pnpm dlx @tauri-apps/cli@2.8.4 build --project-path src-tauri --config src-tauri/tauri.conf.json
+  pnpm dlx @tauri-apps/cli@2.8.4 build
 } finally {
   Pop-Location
 }
