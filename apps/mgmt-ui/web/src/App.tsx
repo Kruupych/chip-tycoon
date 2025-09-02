@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
 import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto } from "./api";
+import { invoke } from "@tauri-apps/api/core";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
@@ -20,6 +21,7 @@ export function App() {
 function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
   const qc = useQueryClient();
+  const [showSave, setShowSave] = useState(false);
   const [tut, setTut] = useState<TutorialDto | null>(null);
   // Lists and state queries
   useQuery({
@@ -112,6 +114,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
           <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>Tick Month</button>
           <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>Simulate Quarter</button>
           <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>Simulate Year</button>
+          <button style={{ marginLeft: 8 }} onClick={() => setShowSave(true)}>Save/Load…</button>
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
@@ -126,6 +129,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         {nav === "capacity" && <Capacity onOverride={(p)=>overrideMut.mutate(p as any)} />}
         {nav === "ai" && <AIPlan onQuarter={() => quarterMut.mutate()} onOverride={(p)=>overrideMut.mutate(p as any)} />}
       </div>
+      {showSave && <SaveLoadModal onClose={()=>setShowSave(false)} />}
     </div>
   );
 }
@@ -496,6 +500,45 @@ function ActiveModsTable() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
+  const [saves, setSaves] = useState<{ id: number; name: string; created_at: string; progress: number }[]>([]);
+  const [name, setName] = useState("");
+  const [autosave, setAutosave] = useState(true);
+  useEffect(() => { (async () => { try { const list = await invoke<any[]>("sim_list_saves"); setSaves(list as any); } catch {} })(); }, []);
+  useEffect(() => { (async () => { try { await invoke("sim_set_autosave", { on: autosave }); } catch {} })(); }, [autosave]);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "white", padding: 16, borderRadius: 8, width: 600 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <h3>Save / Load</h3>
+          <button onClick={onClose}>×</button>
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <label>Name: </label>
+          <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="manual-..." />
+          <button style={{ marginLeft: 8 }} onClick={async ()=>{ try { await invoke("sim_save", { name }); const list = await invoke<any[]>("sim_list_saves"); setSaves(list as any); } catch(e) { console.error(e);} }}>Save</button>
+          <label style={{ marginLeft: 16 }}>
+            <input type="checkbox" checked={autosave} onChange={(e)=>setAutosave(e.target.checked)} /> Autosave per quarter
+          </label>
+        </div>
+        <table style={{ width: "100%" }}>
+          <thead><tr><th align="left">Name</th><th>Created</th><th>Progress</th><th></th></tr></thead>
+          <tbody>
+            {saves.map(s => (
+              <tr key={s.id}>
+                <td>{s.name}</td>
+                <td>{s.created_at}</td>
+                <td align="center">{s.progress}</td>
+                <td align="right"><button onClick={async ()=>{ try { await invoke("sim_load", { saveId: s.id }); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
