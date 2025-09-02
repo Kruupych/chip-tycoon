@@ -13,10 +13,16 @@ if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
   rustup default stable-x86_64-pc-windows-msvc | Out-Null
 }
 
-# Visual Studio Build Tools
-$vswhere = "$Env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path $vswhere)) {
-  Write-Warning "Visual Studio Build Tools not found. Install from https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+# Visual Studio Build Tools (detect via cl.exe or vswhere)
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+  $vswhere = "$Env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+  if (-not (Test-Path $vswhere)) {
+    Write-Warning "Visual Studio Build Tools not detected. Install from https://visualstudio.microsoft.com/visual-cpp-build-tools/ or ensure cl.exe is in PATH."
+  } else {
+    Write-Host "Visual Studio installation detected via vswhere." -ForegroundColor Green
+  }
+} else {
+  Write-Host "MSVC toolchain (cl.exe) detected in PATH." -ForegroundColor Green
 }
 
 # WebView2 Runtime
