@@ -650,6 +650,7 @@ pub struct AiConfig {
     pub planner: PlannerConfig,
     pub tactics: TacticsConfig,
     pub product_weights: ProductWeights,
+    pub product_cost: ProductCostCfg,
 }
 
 /// Default YAML baked in from the assets directory.
@@ -676,6 +677,19 @@ impl Default for ProductWeights {
             price_rel: 0.0,
             appeal: 0.3,
         }
+    }
+}
+
+/// Parameters for unit-cost computation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductCostCfg {
+    pub usable_die_area_mm2: f32,
+    pub yield_overhead_frac: f32,
+}
+
+impl Default for ProductCostCfg {
+    fn default() -> Self {
+        Self { usable_die_area_mm2: 6200.0, yield_overhead_frac: 0.05 }
     }
 }
 

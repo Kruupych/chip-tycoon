@@ -251,6 +251,7 @@ pub fn tapeout_system(
     mut active: ResMut<ActiveProduct>,
     mut pricing: ResMut<Pricing>,
     dom: Res<DomainWorld>,
+    cfg_ai: Res<AiConfig>,
 ) {
     let date = dom.0.macro_state.date;
     let mut rest = Vec::with_capacity(pipeline.0.queue.len());
@@ -267,9 +268,13 @@ pub fn tapeout_system(
         // Recompute unit cost from node wafer cost, die area and yield
         let node = dom.0.tech_tree.iter().find(|n| n.id == spec.tech_node);
         if let Some(n) = node {
-            let units_per_wafer = ((400.0f32 / spec.die_area_mm2).floor() as i64).max(1);
-            let yield_dec = n.yield_baseline.max(Decimal::new(1, 2));
-            let denom = Decimal::from(units_per_wafer) * yield_dec;
+            let usable = cfg_ai.0.product_cost.usable_die_area_mm2.max(1.0);
+            let units_per_wafer = ((usable / spec.die_area_mm2).floor() as i64).max(1);
+            let overhead = cfg_ai.0.product_cost.yield_overhead_frac.clamp(0.0, 0.99);
+            let eff_yield = (n.yield_baseline
+                * Decimal::from_f32_retain(1.0 - overhead).unwrap_or(Decimal::ONE))
+            .max(Decimal::new(1, 2));
+            let denom = Decimal::from(units_per_wafer) * eff_yield;
             if denom > Decimal::ZERO {
                 pricing.unit_cost_usd = n.wafer_cost_usd / denom;
             }
@@ -813,6 +818,33 @@ mod tests {
     }
 
     #[test]
+    fn unit_cost_monotonicity() {
+        let node = core::TechNode {
+            id: core::TechNodeId("N90".into()),
+            year_available: 1990,
+            density_mtr_per_mm2: Decimal::new(1, 0),
+            freq_ghz_baseline: Decimal::new(1, 0),
+            leakage_index: Decimal::new(1, 0),
+            yield_baseline: Decimal::new(9, 1),
+            wafer_cost_usd: Decimal::new(1000, 0),
+            mask_set_cost_usd: Decimal::new(5000, 0),
+            dependencies: vec![],
+        };
+        let cfg = ai::ProductCostCfg { usable_die_area_mm2: 6200.0, yield_overhead_frac: 0.05 };
+        let spec_small = core::ProductSpec { kind: core::ProductKind::CPU, tech_node: core::TechNodeId("N90".into()), microarch: core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, perf_index: 0.5, tdp_w: 65.0, bom_usd: 50.0 };
+        let mut spec_large = spec_small.clone();
+        spec_large.die_area_mm2 = 200.0;
+        let cost_small = compute_unit_cost(&node, &spec_small, &cfg);
+        let cost_large = compute_unit_cost(&node, &spec_large, &cfg);
+        assert!(cost_large > cost_small);
+        // Yield higher lowers cost
+        let mut node2 = node.clone();
+        node2.yield_baseline = Decimal::new(95, 2); // 0.95
+        let cost_high_yield = compute_unit_cost(&node2, &spec_small, &cfg);
+        assert!(cost_high_yield < cost_small);
+    }
+
+    #[test]
     fn deterministic_kpis_with_same_seed() {
         let dom = core::World {
             macro_state: core::MacroState {
@@ -1182,4 +1214,14 @@ mod tests {
             .cash_usd;
         assert!(cash < Decimal::new(10_000_00, 2));
     }
+}
+/// Compute unit cost based on node, spec, and AI product-cost config.
+pub fn compute_unit_cost(node: &core::TechNode, spec: &core::ProductSpec, cfg: &ai::ProductCostCfg) -> Decimal {
+    let usable = cfg.usable_die_area_mm2.max(1.0);
+    let units_per_wafer = ((usable / spec.die_area_mm2).floor() as i64).max(1);
+    let overhead = cfg.yield_overhead_frac.clamp(0.0, 0.99);
+    let eff_yield = (node.yield_baseline * Decimal::from_f32_retain(1.0 - overhead).unwrap_or(Decimal::ONE))
+        .max(Decimal::new(1, 2));
+    let denom = Decimal::from(units_per_wafer) * eff_yield;
+    if denom > Decimal::ZERO { node.wafer_cost_usd / denom } else { node.wafer_cost_usd }
 }
