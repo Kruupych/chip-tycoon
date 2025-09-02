@@ -123,7 +123,7 @@ pub fn metrics_from_world(
     };
     let (cash, debt) = world
         .companies
-        .get(0)
+        .first()
         .map(|c| (c.cash_usd, c.debt_usd))
         .unwrap_or((Decimal::ZERO, Decimal::ZERO));
     let liq_k = safe_ratio(
@@ -234,7 +234,7 @@ pub enum PlanAction {
     AdjustPriceFrac(f32), // +/- fraction of current ASP
     RequestCapacity(u64), // units/month
     AllocateRndBoost(f32), // +/- boost to R&D progress per month
-    // ScheduleTapeout is omitted in this phase's simplified predictor
+                          // ScheduleTapeout is omitted in this phase's simplified predictor
 }
 
 #[derive(Debug, Clone)]
@@ -281,14 +281,24 @@ fn simulate_month(
     cfg: &PlannerConfig,
 ) -> f32 {
     // Update share based on price attractiveness drifting 10% towards target per month
-    let target_share = expected_share_from_price(state.asp, state.ref_price, cfg.price_pref_beta, cfg.competitor_attractiveness);
+    let target_share = expected_share_from_price(
+        state.asp,
+        state.ref_price,
+        cfg.price_pref_beta,
+        cfg.competitor_attractiveness,
+    );
     state.share += (target_share - state.share) * 0.1;
     state.share = state.share.clamp(0.05, 0.95);
 
     // Market demand at this price
     let seg = world.segments.first();
-    let (base_demand, elasticity) = if let Some(s) = seg { (s.base_demand_units, s.price_elasticity) } else { (100_000, -1.2) };
-    let q_total = sim_econ::demand(base_demand, state.asp, state.ref_price, elasticity).unwrap_or(base_demand);
+    let (base_demand, elasticity) = if let Some(s) = seg {
+        (s.base_demand_units, s.price_elasticity)
+    } else {
+        (100_000, -1.2)
+    };
+    let q_total = sim_econ::demand(base_demand, state.asp, state.ref_price, elasticity)
+        .unwrap_or(base_demand);
     // Our addressable demand by share
     let q_our = ((q_total as f32) * state.share).floor() as u64;
     let sell = q_our.min(state.capacity);
@@ -300,8 +310,15 @@ fn simulate_month(
     // Utility contribution this month
     let m = CompanyMetrics {
         share_12m: state.share,
-        margin_ratio: if revenue > Decimal::ZERO { (profit / revenue).to_f32().unwrap_or(0.0).clamp(0.0, 1.0) } else { 0.0 },
-        liquidity_k: safe_ratio(state.cash.to_f32().unwrap_or(0.0), (state.debt.to_f32().unwrap_or(0.0) + 1.0).max(1.0)),
+        margin_ratio: if revenue > Decimal::ZERO {
+            (profit / revenue).to_f32().unwrap_or(0.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        liquidity_k: safe_ratio(
+            state.cash.to_f32().unwrap_or(0.0),
+            (state.debt.to_f32().unwrap_or(0.0) + 1.0).max(1.0),
+        ),
         portfolio_div: (world.segments.len().max(1) as f32 / 5.0).clamp(0.0, 1.0),
     };
     utility_score(&m, w)
@@ -313,7 +330,8 @@ fn apply_action(state: &mut PlannerState, action: PlanAction, cfg: &PlannerConfi
             let factor = Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
             let mut asp = state.asp * factor;
             // Enforce minimum margin
-            let min_price = state.unit_cost * Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap_or(Decimal::ONE);
+            let min_price = state.unit_cost
+                * Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap_or(Decimal::ONE);
             if asp < min_price {
                 asp = min_price;
             }
@@ -358,7 +376,11 @@ pub fn plan_horizon(
         ref_price,
     };
 
-    let mut beam = vec![Node { state: init_state.clone(), score: 0.0, decisions: vec![] }];
+    let mut beam = vec![Node {
+        state: init_state.clone(),
+        score: 0.0,
+        decisions: vec![],
+    }];
     let mut discount_pow = 1.0f32;
     for month in 1..=cfg.months {
         let at_decision = month % cfg.quarter_step == 1; // month 1,4,7,...
@@ -392,7 +414,10 @@ pub fn plan_horizon(
                         score: n.score + discount_pow * util,
                         decisions: {
                             let mut d = n.decisions.clone();
-                            d.push(PlanStepDecision { month_index: month, action: a });
+                            d.push(PlanStepDecision {
+                                month_index: month,
+                                action: a,
+                            });
                             d
                         },
                     });
@@ -402,7 +427,11 @@ pub fn plan_horizon(
             for n in &beam {
                 let mut s2 = n.state.clone();
                 let util = simulate_month(&mut s2, world, w, cfg);
-                candidates.push(Node { state: s2, score: n.score + discount_pow * util, decisions: n.decisions.clone() });
+                candidates.push(Node {
+                    state: s2,
+                    score: n.score + discount_pow * util,
+                    decisions: n.decisions.clone(),
+                });
             }
         }
         // Keep top-k by score
@@ -413,8 +442,14 @@ pub fn plan_horizon(
     }
 
     // Return the best plan and its expected score
-    let best = beam.into_iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal)).unwrap();
-    PlanResult { decisions: best.decisions, expected_score: best.score }
+    let best = beam
+        .into_iter()
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
+        .unwrap();
+    PlanResult {
+        decisions: best.decisions,
+        expected_score: best.score,
+    }
 }
 
 #[cfg(test)]
@@ -424,10 +459,24 @@ mod planner_tests {
 
     fn minimal_world() -> core::World {
         core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(10_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.3 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(10_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.3,
+            }],
         }
     }
 
@@ -435,7 +484,15 @@ mod planner_tests {
     fn low_share_prefers_price_down_not_negative_margin() {
         let world = minimal_world();
         let w = ScoreWeights::default();
-        let cfg = PlannerConfig { months: 12, beam_width: 3, price_step_frac: 0.05, min_margin_frac: 0.05, competitor_attractiveness: 5.0, price_pref_beta: 2.0, ..Default::default() };
+        let cfg = PlannerConfig {
+            months: 12,
+            beam_width: 3,
+            price_step_frac: 0.05,
+            min_margin_frac: 0.05,
+            competitor_attractiveness: 5.0,
+            price_pref_beta: 2.0,
+            ..Default::default()
+        };
         let current = CurrentKpis {
             asp_usd: Decimal::new(300, 0),
             unit_cost_usd: Decimal::new(280, 0),
@@ -453,7 +510,16 @@ mod planner_tests {
             assert!(df <= 0.0); // prefer price down or hold
         }
         // Simulate applying the first decision to check margin floor
-        let mut st = PlannerState { asp: current.asp_usd, unit_cost: current.unit_cost_usd, capacity: current.capacity_units_per_month, cash: current.cash_usd, debt: current.debt_usd, share: current.share, rd_progress: current.rd_progress, ref_price: current.asp_usd };
+        let mut st = PlannerState {
+            asp: current.asp_usd,
+            unit_cost: current.unit_cost_usd,
+            capacity: current.capacity_units_per_month,
+            cash: current.cash_usd,
+            debt: current.debt_usd,
+            share: current.share,
+            rd_progress: current.rd_progress,
+            ref_price: current.asp_usd,
+        };
         apply_action(&mut st, first.action, &cfg);
         let min_price = st.unit_cost * Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap();
         assert!(st.asp >= min_price);
@@ -463,7 +529,13 @@ mod planner_tests {
     fn capacity_shortage_prefers_capacity_over_price_cut() {
         let world = minimal_world();
         let w = ScoreWeights::default();
-        let cfg = PlannerConfig { months: 12, beam_width: 4, price_step_frac: 0.05, capacity_step_units: 200_000, ..Default::default() };
+        let cfg = PlannerConfig {
+            months: 12,
+            beam_width: 4,
+            price_step_frac: 0.05,
+            capacity_step_units: 200_000,
+            ..Default::default()
+        };
         let current = CurrentKpis {
             asp_usd: Decimal::new(300, 0),
             unit_cost_usd: Decimal::new(200, 0),
@@ -547,8 +619,11 @@ pub fn decide_tactics(
     }
     // Enforce margin floor: if price cut would violate, clamp delta to floor
     if price_df < 0.0 {
-        let min_price = unit_cost * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap_or(Decimal::ONE);
-        let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
+        let min_price = unit_cost
+            * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac)
+                .unwrap_or(Decimal::ONE);
+        let new_price =
+            asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
         if new_price < min_price {
             // Compute the maximal allowed negative delta
             let max_negative = (min_price / asp).to_f32().unwrap_or(1.0) - 1.0;
@@ -567,17 +642,11 @@ pub fn decide_tactics(
 }
 
 /// AI config with weights, planner, and tactics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     pub weights: ScoreWeights,
     pub planner: PlannerConfig,
     pub tactics: TacticsConfig,
-}
-
-impl Default for AiConfig {
-    fn default() -> Self {
-        Self { weights: ScoreWeights::default(), planner: PlannerConfig::default(), tactics: TacticsConfig::default() }
-    }
 }
 
 /// Default YAML baked in from the assets directory.
@@ -595,25 +664,45 @@ mod tactics_tests {
 
     #[test]
     fn reduces_price_on_share_drop_with_floor() {
-        let cfg = TacticsConfig { share_drop_delta: 0.05, price_epsilon_frac: 0.1, min_margin_frac: 0.05, ..Default::default() };
+        let cfg = TacticsConfig {
+            share_drop_delta: 0.05,
+            price_epsilon_frac: 0.1,
+            min_margin_frac: 0.05,
+            ..Default::default()
+        };
         let unit_cost = Decimal::new(200, 0);
         let asp = Decimal::new(220, 0); // current margin ~9.09%
-        let m = CompanyMetrics { share_12m: 0.2, margin_ratio: 0.09, liquidity_k: 1.0, portfolio_div: 0.5 };
+        let m = CompanyMetrics {
+            share_12m: 0.2,
+            margin_ratio: 0.09,
+            liquidity_k: 1.0,
+            portfolio_div: 0.5,
+        };
         let (df, _rd) = decide_tactics(&m, 0.3, 1.0, unit_cost, asp, &cfg);
         // requested cut 10% would violate min margin 5%
         // floor should limit it to ~ (210/220 - 1) = -0.04545...
         assert!(df <= 0.0);
         let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap();
-        let min_price = unit_cost * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap();
+        let min_price =
+            unit_cost * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap();
         assert!(new_price >= min_price);
     }
 
     #[test]
     fn increases_price_on_shortage() {
-        let cfg = TacticsConfig { shortage_raise_threshold: 1.2, shortage_raise_epsilon_frac: 0.03, ..Default::default() };
+        let cfg = TacticsConfig {
+            shortage_raise_threshold: 1.2,
+            shortage_raise_epsilon_frac: 0.03,
+            ..Default::default()
+        };
         let unit_cost = Decimal::new(200, 0);
         let asp = Decimal::new(300, 0);
-        let m = CompanyMetrics { share_12m: 0.3, margin_ratio: 0.33, liquidity_k: 1.0, portfolio_div: 0.5 };
+        let m = CompanyMetrics {
+            share_12m: 0.3,
+            margin_ratio: 0.33,
+            liquidity_k: 1.0,
+            portfolio_div: 0.5,
+        };
         let (df, _rd) = decide_tactics(&m, 0.3, 1.5, unit_cost, asp, &cfg);
         assert!(df > 0.0);
     }

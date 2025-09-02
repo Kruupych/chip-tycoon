@@ -8,8 +8,8 @@ use bevy_ecs::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sim_core as core;
 use sim_ai as ai;
+use sim_core as core;
 use tracing::info;
 
 /// Resource wrapper for domain world state.
@@ -83,7 +83,10 @@ pub struct Pricing {
 
 impl Default for Pricing {
     fn default() -> Self {
-        Self { asp_usd: Decimal::new(300, 0), unit_cost_usd: Decimal::new(200, 0) }
+        Self {
+            asp_usd: Decimal::new(300, 0),
+            unit_cost_usd: Decimal::new(200, 0),
+        }
     }
 }
 
@@ -145,10 +148,8 @@ pub fn finance_system(stats: ResMut<Stats>) {
 #[derive(Resource, Clone)]
 pub struct AiConfig(pub ai::AiConfig);
 
-fn stats_rd_boost(stats: &Stats) -> f32 {
-    // Placeholder: expose a tiny boost channel by interpreting last_share as control
-    // Adjusted by AI system below.
-    if stats.last_share.is_finite() { 0.0 } else { 0.0 }
+fn stats_rd_boost(_stats: &Stats) -> f32 {
+    0.0
 }
 
 /// AI strategy system: apply monthly tactics and quarterly plan signal.
@@ -161,22 +162,50 @@ pub fn ai_strategy_system(
 ) {
     // Compute demand/supply ratio for heuristics
     let seg = dom.0.segments.first();
-    let (base_demand, elasticity) = if let Some(s) = seg { (s.base_demand_units, s.price_elasticity) } else { (100_000, -1.2) };
+    let (base_demand, elasticity) = if let Some(s) = seg {
+        (s.base_demand_units, s.price_elasticity)
+    } else {
+        (100_000, -1.2)
+    };
     let ref_price = pricing.asp_usd; // approximate
-    let q_total = sim_econ::demand(base_demand, pricing.asp_usd, ref_price, elasticity).unwrap_or(base_demand);
+    let q_total = sim_econ::demand(base_demand, pricing.asp_usd, ref_price, elasticity)
+        .unwrap_or(base_demand);
     let our_demand = ((q_total as f32) * stats.market_share).floor() as u64;
-    let supply_units = cap.wafers_per_month.saturating_mul(50).saturating_sub(cap.wafers_per_month.saturating_mul(50) / 20); // ~95% good dies
-    let demand_supply_ratio = if supply_units == 0 { 10.0 } else { our_demand as f32 / (supply_units as f32) };
+    let supply_units = cap
+        .wafers_per_month
+        .saturating_mul(50)
+        .saturating_sub(cap.wafers_per_month.saturating_mul(50) / 20); // ~95% good dies
+    let demand_supply_ratio = if supply_units == 0 {
+        10.0
+    } else {
+        our_demand as f32 / (supply_units as f32)
+    };
 
     // Tactics: price adjustments and R&D boost cuts
-    let cm = ai::metrics_from_world(&dom.0, stats.market_share, stats.revenue_usd, stats.profit_usd);
-    let (price_df, rd_boost) = ai::decide_tactics(&cm, stats.last_share, demand_supply_ratio, pricing.unit_cost_usd, pricing.asp_usd, &cfg.0.tactics);
+    let cm = ai::metrics_from_world(
+        &dom.0,
+        stats.market_share,
+        stats.revenue_usd,
+        stats.profit_usd,
+    );
+    let (price_df, rd_boost) = ai::decide_tactics(
+        &cm,
+        stats.last_share,
+        demand_supply_ratio,
+        pricing.unit_cost_usd,
+        pricing.asp_usd,
+        &cfg.0.tactics,
+    );
 
     // Apply price change with floor
     let factor = rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
     let mut new_price = pricing.asp_usd * factor;
-    let min_price = pricing.unit_cost_usd * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.0.tactics.min_margin_frac).unwrap_or(Decimal::ONE);
-    if new_price < min_price { new_price = min_price; }
+    let min_price = pricing.unit_cost_usd
+        * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.0.tactics.min_margin_frac)
+            .unwrap_or(Decimal::ONE);
+    if new_price < min_price {
+        new_price = min_price;
+    }
     pricing.asp_usd = new_price;
 
     // Apply R&D boost as a small adjustment to progress directly (simplified)
@@ -198,8 +227,18 @@ pub fn ai_strategy_system(
             asp_usd: pricing.asp_usd,
             unit_cost_usd: pricing.unit_cost_usd,
             capacity_units_per_month: supply_units,
-            cash_usd: dom.0.companies.get(0).map(|c| c.cash_usd).unwrap_or(Decimal::ZERO),
-            debt_usd: dom.0.companies.get(0).map(|c| c.debt_usd).unwrap_or(Decimal::ZERO),
+            cash_usd: dom
+                .0
+                .companies
+                .first()
+                .map(|c| c.cash_usd)
+                .unwrap_or(Decimal::ZERO),
+            debt_usd: dom
+                .0
+                .companies
+                .first()
+                .map(|c| c.debt_usd)
+                .unwrap_or(Decimal::ZERO),
             share: stats.market_share,
             rd_progress: stats.rd_progress,
         };
@@ -207,10 +246,17 @@ pub fn ai_strategy_system(
         if let Some(first) = plan.decisions.first() {
             match first.action {
                 ai::PlanAction::AdjustPriceFrac(df) => {
-                    let factor = rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
+                    let factor =
+                        rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
                     let mut np = pricing.asp_usd * factor;
-                    let minp = pricing.unit_cost_usd * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.0.tactics.min_margin_frac).unwrap_or(Decimal::ONE);
-                    if np < minp { np = minp; }
+                    let minp = pricing.unit_cost_usd
+                        * rust_decimal::Decimal::from_f32_retain(
+                            1.0 + cfg.0.tactics.min_margin_frac,
+                        )
+                        .unwrap_or(Decimal::ONE);
+                    if np < minp {
+                        np = minp;
+                    }
                     pricing.asp_usd = np;
                 }
                 ai::PlanAction::AllocateRndBoost(db) => {
@@ -334,10 +380,22 @@ mod tests {
                 fx_usd_index: 100.0,
             },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 42 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        };
         let mut w = init_world(dom, cfg);
         {
             let mut stats = w.resource_mut::<Stats>();
@@ -362,12 +420,29 @@ mod tests {
     #[test]
     fn ai_tactics_raise_price_on_shortage() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 42 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        };
         let mut w = init_world(dom, cfg);
         {
             let mut stats = w.resource_mut::<Stats>();
@@ -392,12 +467,29 @@ mod tests {
     #[test]
     fn deterministic_kpis_with_same_seed() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 123 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 123,
+        };
         let snap1 = run_months(init_world(dom.clone(), cfg.clone()), 36);
         let snap2 = run_months(init_world(dom.clone(), cfg.clone()), 36);
         assert_eq!(snap1.months_run, snap2.months_run);
@@ -409,18 +501,55 @@ mod tests {
     #[test]
     fn multi_company_shares_not_degenerate() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
             companies: vec![
-                core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] },
-                core::Company { name: "B".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] },
-                core::Company { name: "C".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] },
-                core::Company { name: "D".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] },
-                core::Company { name: "E".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] },
+                core::Company {
+                    name: "A".into(),
+                    cash_usd: Decimal::new(1_000_000, 0),
+                    debt_usd: Decimal::ZERO,
+                    ip_portfolio: vec![],
+                },
+                core::Company {
+                    name: "B".into(),
+                    cash_usd: Decimal::new(1_000_000, 0),
+                    debt_usd: Decimal::ZERO,
+                    ip_portfolio: vec![],
+                },
+                core::Company {
+                    name: "C".into(),
+                    cash_usd: Decimal::new(1_000_000, 0),
+                    debt_usd: Decimal::ZERO,
+                    ip_portfolio: vec![],
+                },
+                core::Company {
+                    name: "D".into(),
+                    cash_usd: Decimal::new(1_000_000, 0),
+                    debt_usd: Decimal::ZERO,
+                    ip_portfolio: vec![],
+                },
+                core::Company {
+                    name: "E".into(),
+                    cash_usd: Decimal::new(1_000_000, 0),
+                    debt_usd: Decimal::ZERO,
+                    ip_portfolio: vec![],
+                },
             ],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 999 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 999,
+        };
         let snap = run_months(init_world(dom, cfg), 48);
         assert!(snap.market_share > 0.05 && snap.market_share < 0.95);
     }
