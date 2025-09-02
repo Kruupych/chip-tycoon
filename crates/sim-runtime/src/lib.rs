@@ -27,6 +27,7 @@ pub struct Stats {
     pub months_run: u32,
     pub revenue_usd: Decimal,
     pub profit_usd: Decimal,
+    pub contract_costs_cents: i64,
     pub market_share: f32,
     pub last_share: f32,
     pub rd_progress: f32,
@@ -41,6 +42,7 @@ pub struct SimSnapshot {
     pub months_run: u32,
     pub revenue_usd: Decimal,
     pub profit_usd: Decimal,
+    pub contract_costs_cents: i64,
     pub market_share: f32,
     pub rd_progress: f32,
     pub output_units: u64,
@@ -54,6 +56,7 @@ impl From<Stats> for SimSnapshot {
             months_run: s.months_run,
             revenue_usd: s.revenue_usd,
             profit_usd: s.profit_usd,
+            contract_costs_cents: s.contract_costs_cents,
             market_share: s.market_share,
             rd_progress: s.rd_progress,
             output_units: s.output_units,
@@ -122,6 +125,9 @@ pub struct FoundryContract {
     pub foundry_id: String,
     pub wafers_per_month: u32,
     pub price_per_wafer_cents: i64,
+    pub take_or_pay_frac: f32,
+    pub billing_cents_per_wafer: i64,
+    pub billing_model: &'static str, // "take_or_pay" | "pay_as_used"
     pub lead_time_months: u8,
     pub start: chrono::NaiveDate,
     pub end: chrono::NaiveDate,
@@ -178,8 +184,38 @@ pub fn sales_system(mut stats: ResMut<Stats>, pricing: Res<Pricing>) {
 
 /// Finance system: placeholder for interests, cash flow, etc.
 pub fn finance_system(stats: ResMut<Stats>) {
-    // Simple carry-over, ensure profit is not NaN (never is for Decimal).
-    info!(target: "sim.finance", profit = %stats.profit_usd, "Finance tick");
+    // Contract billing handled in `finance_system_billing`
+    info!(target: "sim.finance", profit = %stats.profit_usd, contract_costs_cents = stats.contract_costs_cents, "Finance tick");
+}
+
+/// Finance: charge foundry contracts monthly according to billing model.
+pub fn finance_system_billing(
+    mut stats: ResMut<Stats>,
+    dom: Res<DomainWorld>,
+    cap: Res<Capacity>,
+    book: Res<CapacityBook>,
+) {
+    let date = dom.0.macro_state.date;
+    let mut remaining_used_wafers = cap.wafers_per_month as i64;
+    let mut total_cost_cents: i64 = 0;
+    for c in &book.contracts {
+        if !(date >= c.start && date <= c.end) {
+            continue;
+        }
+        let committed = c.wafers_per_month as i64;
+        let used_from_this = remaining_used_wafers.min(committed).max(0);
+        remaining_used_wafers = (remaining_used_wafers - used_from_this).max(0);
+        let min_bill = (c.take_or_pay_frac.max(0.0).min(1.0) * (committed as f32)).ceil() as i64;
+        let billed_wafers = used_from_this.max(min_bill);
+        let price = if c.billing_cents_per_wafer > 0 {
+            c.billing_cents_per_wafer
+        } else {
+            c.price_per_wafer_cents
+        };
+        let cost = billed_wafers.saturating_mul(price);
+        total_cost_cents = total_cost_cents.saturating_add(cost);
+    }
+    stats.contract_costs_cents = stats.contract_costs_cents.saturating_add(total_cost_cents);
 }
 
 /// Advance tapeout queue and update product appeal when products are released.
@@ -361,6 +397,9 @@ pub fn ai_quarterly_planner_system(
                     foundry_id: "FND-A".into(),
                     wafers_per_month: u as u32,
                     price_per_wafer_cents: 10_000,
+                    take_or_pay_frac: 1.0,
+                    billing_cents_per_wafer: 10_000,
+                    billing_model: "take_or_pay",
                     lead_time_months: lead,
                     start: start_date,
                     end: end_date,
@@ -466,7 +505,7 @@ pub fn run_months_with_telemetry(
             tapeout_system,
             // capture month-level sales metrics
             (sales_system).after(production_system),
-            finance_system,
+            (finance_system_billing, finance_system),
             ai_strategy_system,
             ai_quarterly_planner_system,
         )
@@ -764,7 +803,10 @@ mod tests {
             book.contracts.push(FoundryContract {
                 foundry_id: "F1".into(),
                 wafers_per_month: 500,
-                price_per_wafer_cents: 100_00,
+                price_per_wafer_cents: 10_000,
+                take_or_pay_frac: 1.0,
+                billing_cents_per_wafer: 10_000,
+                billing_model: "take_or_pay",
                 lead_time_months: 2,
                 start: start_plus_2,
                 end: chrono::NaiveDate::from_ymd_opt(y + 1, m, start.day()).unwrap_or(start_plus_2),
@@ -781,6 +823,48 @@ mod tests {
         sched.run(&mut w);
         // After passing start date, capacity should increase
         assert!(w.resource::<Capacity>().wafers_per_month > base);
+    }
+
+    #[test]
+    fn take_or_pay_bills_even_when_underused() {
+        use chrono::Datelike;
+        let dom = core::World {
+            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            tech_tree: vec![],
+            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            segments: vec![],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+        let mut w = init_world(dom.clone(), cfg);
+        // Add an active contract for this month
+        let start = dom.macro_state.date;
+        let end = chrono::NaiveDate::from_ymd_opt(start.year(), start.month(), start.day()).unwrap();
+        {
+            let mut book = w.resource_mut::<CapacityBook>();
+            book.contracts.push(FoundryContract {
+                foundry_id: "F1".into(),
+                wafers_per_month: 3000,
+                price_per_wafer_cents: 1000,
+                take_or_pay_frac: 1.0,
+                billing_cents_per_wafer: 1000,
+                billing_model: "take_or_pay",
+                lead_time_months: 0,
+                start,
+                end,
+            });
+        }
+        // Force underuse: zero out used wafers this month
+        {
+            let mut cap = w.resource_mut::<Capacity>();
+            cap.wafers_per_month = 0;
+        }
+        // Run finance billing only
+        let mut sched = bevy_ecs::schedule::Schedule::default();
+        sched.add_systems(finance_system_billing);
+        sched.run(&mut w);
+        let stats = w.resource::<Stats>();
+        // Expect billed: 3000 * 1000 cents
+        assert_eq!(stats.contract_costs_cents, 3_000_000);
     }
 
     #[test]
