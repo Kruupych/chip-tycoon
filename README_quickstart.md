@@ -22,3 +22,13 @@ Troubleshooting
 - If UI doesn’t start on Linux, ensure WebKitGTK and dependencies are installed.
 - For Windows, ensure MSVC and WebView2 are present.
 
+Windows UI Build
+
+Run these from Windows PowerShell:
+
+```
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+./scripts/windows/install-tauri-prereqs.ps1
+./scripts/windows/build-ui.ps1
+```
+
