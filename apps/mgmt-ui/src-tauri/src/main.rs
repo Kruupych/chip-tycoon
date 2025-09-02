@@ -97,8 +97,55 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
 
 #[tauri::command]
 async fn sim_plan_quarter() -> Result<PlanSummary, String> {
-    // Placeholder implementation
-    Ok(PlanSummary { decisions: vec!["AdjustPrice(-5%)".into()], expected_score: 0.5 })
+    let guard = SIM_STATE.read().unwrap();
+    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let world = &st.world;
+    let dom = &st.dom;
+    // Derive current KPIs for planner
+    let stats = world.resource::<runtime::Stats>();
+    let pricing = world.resource::<runtime::Pricing>();
+    // Approximate monthly good-unit capacity (if Capacity present, else baseline)
+    let cap = world
+        .get_resource::<runtime::Capacity>()
+        .map(|c| c.wafers_per_month * 50 - (c.wafers_per_month * 50) / 20)
+        .unwrap_or(1_000_000);
+    let current = sim_ai::CurrentKpis {
+        asp_usd: pricing.asp_usd,
+        unit_cost_usd: pricing.unit_cost_usd,
+        capacity_units_per_month: cap,
+        cash_usd: dom
+            .companies
+            .first()
+            .map(|c| c.cash_usd)
+            .unwrap_or(rust_decimal::Decimal::ZERO),
+        debt_usd: dom
+            .companies
+            .first()
+            .map(|c| c.debt_usd)
+            .unwrap_or(rust_decimal::Decimal::ZERO),
+        share: stats.market_share,
+        rd_progress: stats.rd_progress,
+    };
+    let cfg_ai = world.resource::<runtime::AiConfig>().0.clone();
+    let mut cfg = cfg_ai.planner.clone();
+    cfg.months = 3; // plan a quarter horizon
+    let plan = sim_ai::plan_horizon(&st.dom, &current, &cfg_ai.weights, &cfg);
+    // Convert first few decisions to strings
+    let mut decisions = Vec::new();
+    for d in plan.decisions.iter().take(5) {
+        let s = match d.action {
+            sim_ai::PlanAction::AdjustPriceFrac(df) if df < 0.0 => format!("ASP{}%", (df * 100.0).round()),
+            sim_ai::PlanAction::AdjustPriceFrac(df) if df > 0.0 => format!("ASP+{}%", (df * 100.0).round()),
+            sim_ai::PlanAction::AdjustPriceFrac(_) => "ASP±0%".into(),
+            sim_ai::PlanAction::RequestCapacity(u) => format!("Capacity+{}u/mo", u),
+            sim_ai::PlanAction::AllocateRndBoost(_b) => "R&D boost".into(),
+            sim_ai::PlanAction::ScheduleTapeout { expedite } => {
+                if expedite { "Tapeout (expedite)".into() } else { "Tapeout".into() }
+            }
+        };
+        decisions.push(s);
+    }
+    Ok(PlanSummary { decisions, expected_score: plan.expected_score })
 }
 
 #[derive(Deserialize, Debug)]
