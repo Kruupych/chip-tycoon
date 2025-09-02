@@ -2459,12 +2459,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "criterion",
  "proptest",
  "rust_decimal",
  "serde",
  "serde_yaml",
  "sim-core",
  "sim-econ",
+ "sim-runtime",
  "tracing",
 ]
 
