@@ -1857,6 +1857,127 @@ mod tests {
     }
 
     #[test]
+    fn tutorial_regression_24m_three_steps_done() {
+        // Setup minimal world and enable tutorial
+        let dom = core::World {
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: Decimal::new(1, 0),
+                freq_ghz_baseline: Decimal::new(1, 0),
+                leakage_index: Decimal::new(1, 0),
+                yield_baseline: Decimal::new(9, 1),
+                wafer_cost_usd: Decimal::new(1000, 0),
+                mask_set_cost_usd: Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
+        };
+        let mut w = init_world(
+            dom,
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        init_tutorial(&mut w, 1_000_000 * 100);
+        // Perform the three user actions in order
+        let _ = apply_price_delta(&mut w, -0.05);
+        let _ = apply_capacity_request(&mut w, 1000, 12, Some(10_000), Some(1.0));
+        let _ = apply_tapeout_request(&mut w, 0.8, 100.0, "N90".into(), true);
+        // Run until month 24
+        let _ = run_months_in_place(&mut w, 24);
+        let tut = w.resource::<TutorialState>();
+        assert!(
+            tut.step1_price_cut_done && tut.step2_contract_done && tut.step3_tapeout_expedite_done
+        );
+    }
+
+    #[test]
+    fn windows_1995_1998_regression() {
+        // Load 1990s world and events
+        let tech = vec![core::TechNode {
+            id: core::TechNodeId("N600".into()),
+            year_available: 1990,
+            density_mtr_per_mm2: Decimal::new(1, 0),
+            freq_ghz_baseline: Decimal::new(1, 0),
+            leakage_index: Decimal::new(1, 0),
+            yield_baseline: Decimal::new(9, 1),
+            wafer_cost_usd: Decimal::new(1000, 0),
+            mask_set_cost_usd: Decimal::new(2_500_000, 2),
+            dependencies: vec![],
+        }];
+        let markets = MarketConfigRes::from_yaml_str(include_str!("../../../assets/data/markets_1990s.yaml")).unwrap();
+        let start = chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+        let segments: Vec<core::MarketSegment> = markets
+            .segments
+            .iter()
+            .map(|s| core::MarketSegment {
+                name: s.name.clone(),
+                base_demand_units: s.base_demand_units_1990,
+                price_elasticity: s.elasticity,
+            })
+            .collect();
+        let dom = core::World {
+            macro_state: core::MacroState {
+                date: start,
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: tech,
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(5_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments,
+        };
+        let mut w = init_world(
+            dom,
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 7,
+            },
+        );
+        w.insert_resource(markets);
+        w.insert_resource(load_market_events_yaml("assets/events/campaign_1990s.yaml"));
+        // Run to 1995-12
+        while w.resource::<DomainWorld>().0.macro_state.date
+            < chrono::NaiveDate::from_ymd_opt(1995, 12, 1).unwrap()
+        {
+            let _ = run_months_in_place(&mut w, 1);
+        }
+        let s95 = w.resource::<Stats>().clone();
+        assert!(s95.market_share >= 0.15 && s95.market_share <= 0.95);
+        // Run to 1998-12
+        while w.resource::<DomainWorld>().0.macro_state.date
+            < chrono::NaiveDate::from_ymd_opt(1998, 12, 1).unwrap()
+        {
+            let _ = run_months_in_place(&mut w, 1);
+        }
+        let s98 = w.resource::<Stats>().clone();
+        assert!(s98.profit_usd >= Decimal::ZERO);
+    }
+
+    #[test]
     fn market_trend_scales_for_1995_and_2000() {
         let yaml = r#"segments:
   - id: desktop
