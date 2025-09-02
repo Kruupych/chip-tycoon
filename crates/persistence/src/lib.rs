@@ -210,6 +210,46 @@ pub async fn list_tapeout_requests(pool: &Pool<Sqlite>, save_id: i64) -> Result<
         .collect())
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ReleasedRow {
+    pub product_json: String,
+    pub released_at: String,
+}
+
+pub async fn insert_released_product(
+    pool: &Pool<Sqlite>,
+    save_id: i64,
+    r: &ReleasedRow,
+) -> Result<i64> {
+    let rec = sqlx::query(
+        r#"INSERT INTO released_products
+            (save_id, product_json, released_at)
+            VALUES (?1, ?2, ?3) RETURNING id"#,
+    )
+    .bind(save_id)
+    .bind(&r.product_json)
+    .bind(&r.released_at)
+    .fetch_one(pool)
+    .await?;
+    Ok(rec.try_get("id").unwrap_or(0))
+}
+
+pub async fn list_released_products(pool: &Pool<Sqlite>, save_id: i64) -> Result<Vec<ReleasedRow>> {
+    let rows = sqlx::query(
+        r#"SELECT product_json, released_at FROM released_products WHERE save_id = ?1 ORDER BY id"#,
+    )
+    .bind(save_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ReleasedRow {
+            product_json: r.try_get("product_json").unwrap_or_default(),
+            released_at: r.try_get("released_at").unwrap_or_default(),
+        })
+        .collect())
+}
+
 /// Row format for telemetry exports.
 #[derive(Clone, Debug)]
 pub struct TelemetryRow {
@@ -473,6 +513,37 @@ mod tests {
             let _tid = insert_tapeout_request(&pool, save_id, &t).await.unwrap();
             let ts = list_tapeout_requests(&pool, save_id).await.unwrap();
             assert_eq!(ts[0].tech_node, "N90");
+        });
+    }
+
+    #[test]
+    fn released_products_roundtrip() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let pool = init_db("sqlite::memory:").await.unwrap();
+            let save_id = create_save(&pool, "test", None).await.unwrap();
+            let spec = sim_core::ProductSpec {
+                kind: sim_core::ProductKind::CPU,
+                tech_node: sim_core::TechNodeId("N90".into()),
+                microarch: sim_core::MicroArch {
+                    ipc_index: 1.0,
+                    pipeline_depth: 10,
+                    cache_l1_kb: 64,
+                    cache_l2_mb: 1.0,
+                    chiplet: false,
+                },
+                die_area_mm2: 120.0,
+                perf_index: 0.7,
+                tdp_w: 65.0,
+                bom_usd: 50.0,
+            };
+            let row = ReleasedRow {
+                product_json: serde_json::to_string(&spec).unwrap(),
+                released_at: "1990-01-01".into(),
+            };
+            let _ = insert_released_product(&pool, save_id, &row).await.unwrap();
+            let back = list_released_products(&pool, save_id).await.unwrap();
+            assert_eq!(back[0], row);
         });
     }
 

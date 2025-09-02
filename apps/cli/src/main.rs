@@ -99,10 +99,15 @@ fn main() -> Result<()> {
         n_companies, n_nodes, n_segments
     );
     println!(
-        "KPI | months: {} | revenue: ${} | profit: ${} | share: {:.1}% | R&D: {:.1}% | output: {} | defects: {} | inv: {}",
+        "KPI | months: {} | cash: ${:.2} | revenue: ${:.2} | cogs: ${:.2} | contract_costs: ${:.2} | profit: ${:.2} | asp: ${:.2} | unit_cost: ${:.2} | share: {:.1}% | R&D: {:.1}% | output: {} | defects: {} | inv: {}",
         snap.months_run,
-        snap.revenue_usd,
-        snap.profit_usd,
+        (snap.cash_cents as f64) / 100.0,
+        (snap.revenue_cents as f64) / 100.0,
+        (snap.cogs_cents as f64) / 100.0,
+        (snap.contract_costs_cents as f64) / 100.0,
+        (snap.profit_cents as f64) / 100.0,
+        (snap.asp_cents as f64) / 100.0,
+        (snap.unit_cost_cents as f64) / 100.0,
         snap.market_share * 100.0,
         snap.rd_progress * 100.0,
         snap.output_units,

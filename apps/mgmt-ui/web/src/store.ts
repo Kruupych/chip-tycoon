@@ -16,4 +16,3 @@ export const useAppStore = create<State>((set) => ({
   setSnapshot: (s) => set((st) => ({ snapshot: s, history: [...st.history, s] })),
   setLoading: (b) => set({ loading: b }),
 }));
-

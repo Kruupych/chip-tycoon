@@ -689,7 +689,10 @@ pub struct ProductCostCfg {
 
 impl Default for ProductCostCfg {
     fn default() -> Self {
-        Self { usable_die_area_mm2: 6200.0, yield_overhead_frac: 0.05 }
+        Self {
+            usable_die_area_mm2: 6200.0,
+            yield_overhead_frac: 0.05,
+        }
     }
 }
 
