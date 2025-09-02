@@ -507,9 +507,8 @@ pub fn ai_quarterly_planner_system(
                         ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready);
                     }
                     expedite_cost = 100_000; // $1,000.00
-                    fevents.expedite_spend_cents = fevents
-                        .expedite_spend_cents
-                        .saturating_add(expedite_cost);
+                    fevents.expedite_spend_cents =
+                        fevents.expedite_spend_cents.saturating_add(expedite_cost);
                 }
                 let req = core::TapeoutRequest {
                     product: spec.clone(),
@@ -688,10 +687,9 @@ pub fn finance_system_cash(
     cfg: Res<FinanceConfig>,
     mut fevents: ResMut<FinanceEvents>,
 ) {
-    let revenue_cents = persistence::decimal_to_cents_i64(
-        pricing.asp_usd * Decimal::from(stats.last_sold_units),
-    )
-    .unwrap_or(0);
+    let revenue_cents =
+        persistence::decimal_to_cents_i64(pricing.asp_usd * Decimal::from(stats.last_sold_units))
+            .unwrap_or(0);
     let cogs_cents = persistence::decimal_to_cents_i64(
         pricing.unit_cost_usd * Decimal::from(stats.last_sold_units),
     )
@@ -880,9 +878,7 @@ pub fn apply_tapeout_request(
         }
         expedite_cost = 100_000; // $1,000.00 booked via finance events
         let mut fe = world.resource_mut::<FinanceEvents>();
-        fe.expedite_spend_cents = fe
-            .expedite_spend_cents
-            .saturating_add(expedite_cost);
+        fe.expedite_spend_cents = fe.expedite_spend_cents.saturating_add(expedite_cost);
     }
     // enqueue
     let mut pipe = world.resource_mut::<Pipeline>();
@@ -1265,9 +1261,16 @@ mod tests {
                 debt_usd: Decimal::ZERO,
                 ip_portfolio: vec![],
             }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 55 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 55,
+        };
         let mut w = init_world(dom.clone(), cfg);
         // RD budget 10,000 cents/month
         {

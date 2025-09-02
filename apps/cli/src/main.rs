@@ -91,8 +91,8 @@ fn main() -> Result<()> {
         tick_days: 30,
         rng_seed: 42,
     };
-    let ecs_world = sim_runtime::init_world(world, cfg);
-    let (snap, telemetry) = sim_runtime::run_months_with_telemetry(ecs_world, months);
+    let mut ecs_world = sim_runtime::init_world(world, cfg);
+    let (snap, telemetry) = sim_runtime::run_months_in_place(&mut ecs_world, months);
 
     println!(
         "World OK | companies: {} | tech nodes: {} | segments: {}",
