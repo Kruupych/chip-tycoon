@@ -1,5 +1,8 @@
 Chip Tycoon — экономико-технологический симулятор индустрии CPU/GPU
 
+[![CI](https://github.com/your-org/chip-tycoon/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/chip-tycoon/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/rust-stable%201.75%2B-orange)
+
 Цель: детерминированная, модульная симуляция индустрии полупроводников с 1990-х до будущего. Ядро на Rust с ECS (Bevy), данные в SQLite/Parquet, UI — Bevy и Tauri+React.
 
 Сборка и проверка

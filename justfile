@@ -39,6 +39,10 @@ guard-clean:
 # Композитная CI-цель
 ci: guard-clean lint test build
 
+# Frontend tests (optional)
+test-ui:
+    cd apps/mgmt-ui/web && pnpm i && pnpm test
+
 # Запуск Bevy-фронта (игры)
 run-game:
     cargo run -p game-frontend
