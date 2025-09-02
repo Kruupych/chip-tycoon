@@ -183,7 +183,11 @@ pub fn finance_system(stats: ResMut<Stats>) {
 }
 
 /// Advance tapeout queue and update product appeal when products are released.
-pub fn tapeout_system(mut pipeline: ResMut<Pipeline>, mut appeal: ResMut<ProductAppeal>, dom: Res<DomainWorld>) {
+pub fn tapeout_system(
+    mut pipeline: ResMut<Pipeline>,
+    mut appeal: ResMut<ProductAppeal>,
+    dom: Res<DomainWorld>,
+) {
     let date = dom.0.macro_state.date;
     let mut rest = Vec::with_capacity(pipeline.0.queue.len());
     let mut released_spec: Option<core::ProductSpec> = None;
@@ -322,10 +326,10 @@ pub fn ai_quarterly_planner_system(
     if let Some(first) = plan.decisions.first() {
         match first.action {
             ai::PlanAction::AdjustPriceFrac(df) => {
-                let factor = rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
+                let factor =
+                    rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
                 let mut np = pricing.asp_usd * factor;
-                let minp = pricing
-                    .unit_cost_usd
+                let minp = pricing.unit_cost_usd
                     * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.0.tactics.min_margin_frac)
                         .unwrap_or(Decimal::ONE);
                 if np < minp {
@@ -349,8 +353,10 @@ pub fn ai_quarterly_planner_system(
                     }
                     add -= 1;
                 }
-                let start_date = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(start);
-                let end_date = chrono::NaiveDate::from_ymd_opt(y + 1, m, start.day()).unwrap_or(start_date);
+                let start_date =
+                    chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(start);
+                let end_date =
+                    chrono::NaiveDate::from_ymd_opt(y + 1, m, start.day()).unwrap_or(start_date);
                 book.contracts.push(FoundryContract {
                     foundry_id: "FND-A".into(),
                     wafers_per_month: u as u32,
@@ -715,12 +721,29 @@ mod tests {
     fn capacity_contract_increases_after_lead_time() {
         use chrono::Datelike;
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 1,
+        };
         let mut w = init_world(dom.clone(), cfg);
         // Initial capacity via schedule
         let mut sched = bevy_ecs::schedule::Schedule::default();
@@ -731,7 +754,10 @@ mod tests {
         let start = dom.macro_state.date;
         let (mut y, mut m) = (start.year(), start.month());
         m += 2;
-        if m > 12 { y += 1; m -= 12; }
+        if m > 12 {
+            y += 1;
+            m -= 12;
+        }
         let start_plus_2 = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap();
         {
             let mut book = w.resource_mut::<CapacityBook>();
@@ -760,12 +786,39 @@ mod tests {
     #[test]
     fn expedite_tapeout_reduces_ready_and_spends_cash() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
-            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: Decimal::new(1,0), freq_ghz_baseline: Decimal::new(1,0), leakage_index: Decimal::new(1,0), yield_baseline: Decimal::new(9,1), wafer_cost_usd: Decimal::new(1000,0), mask_set_cost_usd: Decimal::new(5000,0), dependencies: vec![] }],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(10_000_00, 2), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: Decimal::new(1, 0),
+                freq_ghz_baseline: Decimal::new(1, 0),
+                leakage_index: Decimal::new(1, 0),
+                yield_baseline: Decimal::new(9, 1),
+                wafer_cost_usd: Decimal::new(1000, 0),
+                mask_set_cost_usd: Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(10_000_00, 2),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 7 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 7,
+        };
         let mut w = init_world(dom.clone(), cfg);
         let start = dom.macro_state.date;
         // Manually create an expedited tapeout
@@ -773,20 +826,56 @@ mod tests {
             let mut pipe = w.resource_mut::<Pipeline>();
             // Ready baseline after 9 months, expedited by 3 months
             let mut ready = start;
-            for _ in 0..6 { let (mut y, mut m) = (ready.year(), ready.month()); m += 1; if m > 12 { y += 1; m = 1; } ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready); }
-            let spec = core::ProductSpec { kind: core::ProductKind::CPU, tech_node: core::TechNodeId("N90".into()), microarch: core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, tdp_w: 65.0, bom_usd: 50.0 };
-            pipe.0.queue.push(core::TapeoutRequest { product: spec, tech_node: core::TechNodeId("N90".into()), start, ready, expedite: true, expedite_cost_cents: 100_000 });
+            for _ in 0..6 {
+                let (mut y, mut m) = (ready.year(), ready.month());
+                m += 1;
+                if m > 12 {
+                    y += 1;
+                    m = 1;
+                }
+                ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready);
+            }
+            let spec = core::ProductSpec {
+                kind: core::ProductKind::CPU,
+                tech_node: core::TechNodeId("N90".into()),
+                microarch: core::MicroArch {
+                    ipc_index: 1.0,
+                    pipeline_depth: 10,
+                    cache_l1_kb: 64,
+                    cache_l2_mb: 1.0,
+                    chiplet: false,
+                },
+                die_area_mm2: 100.0,
+                tdp_w: 65.0,
+                bom_usd: 50.0,
+            };
+            pipe.0.queue.push(core::TapeoutRequest {
+                product: spec,
+                tech_node: core::TechNodeId("N90".into()),
+                start,
+                ready,
+                expedite: true,
+                expedite_cost_cents: 100_000,
+            });
         }
         // Spend expedite cost
         {
             let mut dw = w.resource_mut::<DomainWorld>();
-            if let Some(c) = dw.0.companies.first_mut() { c.cash_usd -= Decimal::new(100_000, 2); }
+            if let Some(c) = dw.0.companies.first_mut() {
+                c.cash_usd -= Decimal::new(100_000, 2);
+            }
         }
         // Advance date to ready
         {
             let mut dw = w.resource_mut::<DomainWorld>();
             let (mut y, mut m) = (start.year(), start.month());
-            for _ in 0..6 { m += 1; if m > 12 { y += 1; m = 1; } }
+            for _ in 0..6 {
+                m += 1;
+                if m > 12 {
+                    y += 1;
+                    m = 1;
+                }
+            }
             dw.0.macro_state.date = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap();
         }
         // Run tapeout system
@@ -796,7 +885,13 @@ mod tests {
         // Released should be non-empty; appeal increased; cash decreased
         assert!(!w.resource::<Pipeline>().0.released.is_empty());
         assert!(w.resource::<ProductAppeal>().0 > 0.0);
-        let cash = w.resource::<DomainWorld>().0.companies.first().unwrap().cash_usd;
+        let cash = w
+            .resource::<DomainWorld>()
+            .0
+            .companies
+            .first()
+            .unwrap()
+            .cash_usd;
         assert!(cash < Decimal::new(10_000_00, 2));
     }
 }

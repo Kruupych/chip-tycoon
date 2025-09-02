@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 sim-runtime = { path = "../../crates/sim-runtime" }
+bevy_ecs = "0.13"

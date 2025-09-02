@@ -1089,6 +1089,7 @@ dependencies = [
 name = "game-frontend"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "sim-runtime",
 ]
 

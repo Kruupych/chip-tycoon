@@ -231,8 +231,8 @@ impl Default for PlannerConfig {
 /// A single action considered by the planner at quarterly decision points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlanAction {
-    AdjustPriceFrac(f32), // +/- fraction of current ASP
-    RequestCapacity(u64), // units/month
+    AdjustPriceFrac(f32),  // +/- fraction of current ASP
+    RequestCapacity(u64),  // units/month
     AllocateRndBoost(f32), // +/- boost to R&D progress per month
     ScheduleTapeout { expedite: bool },
     // ScheduleTapeout is omitted in this phase's simplified predictor
@@ -623,7 +623,8 @@ pub fn decide_tactics(
     }
     // Enforce margin floor: if price cut would violate, clamp delta to floor
     if price_df < 0.0 {
-        let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
+        let new_price =
+            asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
         if !respects_min_margin(new_price, unit_cost, cfg.min_margin_frac) {
             // Compute maximal allowed negative delta
             let minp = min_price(unit_cost, cfg.min_margin_frac);
