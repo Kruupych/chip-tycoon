@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use chrono::NaiveDate;
+use persistence::{self, TelemetryRow};
 use sim_core::*;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
@@ -91,7 +92,7 @@ fn main() -> Result<()> {
         rng_seed: 42,
     };
     let ecs_world = sim_runtime::init_world(world, cfg);
-    let snap = sim_runtime::run_months(ecs_world, months);
+    let (snap, telemetry) = sim_runtime::run_months_with_telemetry(ecs_world, months);
 
     println!(
         "World OK | companies: {} | tech nodes: {} | segments: {}",
@@ -108,6 +109,27 @@ fn main() -> Result<()> {
         snap.defect_units,
         snap.inventory_units
     );
+
+    // Write telemetry parquet
+    let rows: Vec<TelemetryRow> = telemetry
+        .into_iter()
+        .map(|t| TelemetryRow {
+            month_index: t.month_index,
+            output_units: t.output_units,
+            sold_units: t.sold_units,
+            asp_usd: t.asp_usd.to_string().parse::<f64>().unwrap_or(0.0),
+            unit_cost_usd: t.unit_cost_usd.to_string().parse::<f64>().unwrap_or(0.0),
+            margin_usd: t.margin_usd.to_string().parse::<f64>().unwrap_or(0.0),
+            revenue_usd: t.revenue_usd.to_string().parse::<f64>().unwrap_or(0.0),
+        })
+        .collect();
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let out_path = format!("telemetry/run_{}.parquet", ts);
+    if let Err(e) = persistence::write_telemetry_parquet(&out_path, &rows) {
+        eprintln!("failed to write telemetry: {e}");
+    } else {
+        println!("Telemetry written: {}", out_path);
+    }
 
     Ok(())
 }

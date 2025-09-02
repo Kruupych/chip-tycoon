@@ -38,7 +38,7 @@ bevy = { version = "0.13", default-features = false, features = ["bevy_asset", "
 bevy_ecs = "0.13"
 
 # DB and async
-sqlx = { version = "0.7", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
+sqlx = { version = "0.7", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time"] }
 
 # Data pipeline

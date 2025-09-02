@@ -58,6 +58,18 @@ impl From<Stats> for SimSnapshot {
     }
 }
 
+/// Per-month telemetry captured after each tick.
+#[derive(Clone, Debug, Default)]
+pub struct MonthlyTelemetry {
+    pub month_index: u32,
+    pub output_units: u64,
+    pub sold_units: u64,
+    pub asp_usd: Decimal,
+    pub unit_cost_usd: Decimal,
+    pub margin_usd: Decimal,
+    pub revenue_usd: Decimal,
+}
+
 /// R&D system: increases R&D progress deterministically.
 pub fn r_and_d_system(mut stats: ResMut<Stats>) {
     let inc = 0.01f32; // 1% per month baseline
@@ -127,8 +139,11 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w
 }
 
-/// Run monthly ticks and return a KPI snapshot.
-pub fn run_months(mut world: World, months: u32) -> SimSnapshot {
+/// Run monthly ticks and return a KPI snapshot and per-month telemetry.
+pub fn run_months_with_telemetry(
+    mut world: World,
+    months: u32,
+) -> (SimSnapshot, Vec<MonthlyTelemetry>) {
     let mut schedule = bevy_ecs::schedule::Schedule::default();
     use bevy_ecs::schedule::IntoSystemConfigs;
     schedule.add_systems(
@@ -136,21 +151,41 @@ pub fn run_months(mut world: World, months: u32) -> SimSnapshot {
             r_and_d_system,
             foundry_capacity_system,
             production_system,
-            sales_system,
+            // capture month-level sales metrics
+            (sales_system).after(production_system),
             finance_system,
             ai_strategy_system,
         )
             .chain(),
     );
-
-    for _ in 0..months {
+    let mut telemetry = Vec::with_capacity(months as usize);
+    for m in 0..months {
         schedule.run(&mut world);
         let mut stats = world.resource_mut::<Stats>();
         stats.months_run = stats.months_run.saturating_add(1);
+        let sold_units = (stats.inventory_units as f64 * 0.5) as u64; // mirrors sales_system
+        let asp = Decimal::new(300, 0);
+        let unit_cost = Decimal::new(200, 0);
+        let revenue = asp * Decimal::from(sold_units);
+        let margin = revenue - unit_cost * Decimal::from(sold_units);
+        telemetry.push(MonthlyTelemetry {
+            month_index: m + 1,
+            output_units: stats.output_units,
+            sold_units,
+            asp_usd: asp,
+            unit_cost_usd: unit_cost,
+            margin_usd: margin,
+            revenue_usd: revenue,
+        });
     }
     world.remove_resource::<Capacity>();
     let stats = world.remove_resource::<Stats>().unwrap_or_default();
-    stats.into()
+    (stats.clone().into(), telemetry)
+}
+
+pub fn run_months(world: World, months: u32) -> SimSnapshot {
+    let (snap, _t) = run_months_with_telemetry(world, months);
+    snap
 }
 
 #[cfg(test)]
