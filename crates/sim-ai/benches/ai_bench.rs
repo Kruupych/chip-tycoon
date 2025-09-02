@@ -42,7 +42,7 @@ fn build_world(n_companies: usize) -> sim_core::World {
 
 fn bench_quick(c: &mut Criterion) {
     let world = build_world(10);
-    let w = sim_runtime::init_world(
+    let w0 = sim_runtime::init_world(
         world,
         sim_core::SimConfig {
             tick_days: 30,
@@ -51,7 +51,8 @@ fn bench_quick(c: &mut Criterion) {
     );
     c.bench_function("sim 10 companies x 40y", |b| {
         b.iter(|| {
-            let _ = black_box(sim_runtime::run_months(w.clone(), 480));
+            let w = sim_runtime::clone_world_state(&w0);
+            let _ = black_box(sim_runtime::run_months(w, 480));
         })
     });
 }
