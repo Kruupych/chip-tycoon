@@ -110,3 +110,20 @@ Performance budget
 Balance regression tests
 
 - Trend scaling unit tests for 1995/2000, stronger-segment sales integration test, and YAML snapshot checks guard accidental balance drift.
+
+## Релизные сборки
+
+- CLI: `just release-cli` — соберёт `dist/cli`.
+- Desktop UI (Tauri): `just release-ui` — сборка инсталляторов/бандлов под `apps/mgmt-ui/src-tauri/target/release/bundle`.
+- `just release-all` — соберёт всё и сложит артефакты под `./dist/`.
+
+### Платформенные заметки
+
+- Windows:
+  - MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`).
+  - Графика: wgpu/DX12, обновлённые драйверы.
+  - Tauri: Node.js + pnpm, Visual Studio Build Tools, WebView2 Runtime.
+  - WSL vs Windows: для Tauri лучше нативный Windows; в WSL нет Win32 GUI.
+- Linux:
+  - Зависимости Tauri: WebKitGTK (например, `libwebkit2gtk-4.1-dev`), `libayatana-appindicator3-dev`, `libgtk-3-dev`, `libssl-dev` (имена зависят от дистрибутива).
+  - Wayland: проверьте поддержку WebKitGTK; при проблемах рендера выставьте `WEBKIT_DISABLE_COMPOSITING_MODE=1`.

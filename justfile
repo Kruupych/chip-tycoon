@@ -61,3 +61,17 @@ snap:
 
 profile:
     cargo criterion --bench sim_bench
+
+# Release builds
+release-cli:
+    cargo build -p cli --release
+
+release-ui:
+    cd apps/mgmt-ui && pnpm i && pnpm tauri build
+
+release-all: release-cli release-ui
+    mkdir -p dist
+    cp -v target/release/cli dist/cli || true
+    if [ -d apps/mgmt-ui/src-tauri/target/release/bundle ]; then \
+      mkdir -p dist/mgmt-ui && cp -rv apps/mgmt-ui/src-tauri/target/release/bundle dist/mgmt-ui/; \
+    fi
