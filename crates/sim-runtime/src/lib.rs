@@ -634,6 +634,7 @@ pub fn run_months_in_place(world: &mut World, months: u32) -> (SimSnapshot, Vec<
 mod tests {
     use super::*;
     use rust_decimal::Decimal;
+    use tokio::runtime::Runtime;
 
     #[test]
     fn world_creates_and_ticks() {
@@ -876,6 +877,55 @@ mod tests {
         assert_eq!(snap1.revenue_usd, snap2.revenue_usd);
         assert_eq!(snap1.profit_usd, snap2.profit_usd);
         assert!((snap1.market_share - snap2.market_share).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn rehydrate_from_db_applies_contracts_and_tapeout() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let pool = persistence::init_db("sqlite::memory:").await.unwrap();
+            let save_id = persistence::create_save(&pool, "s", None).await.unwrap();
+            // Insert a contract billed this month
+            let c = persistence::ContractRow { foundry_id: "F1".into(), wafers_per_month: 3000, price_per_wafer_cents: 1000, take_or_pay_frac: 1.0, billing_cents_per_wafer: 1000, billing_model: "take_or_pay".into(), lead_time_months: 0, start: "1990-01-01".into(), end: "1990-12-01".into() };
+            let _ = persistence::insert_contract(&pool, save_id, &c).await.unwrap();
+            // Tapeout ready next month
+            let spec = core::ProductSpec { kind: core::ProductKind::CPU, tech_node: core::TechNodeId("N90".into()), microarch: core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, perf_index: 0.6, tdp_w: 65.0, bom_usd: 50.0 };
+            let t = persistence::TapeoutRow { product_json: serde_json::to_string(&spec).unwrap(), tech_node: "N90".into(), start: "1990-01-01".into(), ready: "1990-01-01".into(), expedite: 0, expedite_cost_cents: 0 };
+            let _ = persistence::insert_tapeout_request(&pool, save_id, &t).await.unwrap();
+
+            // Load rows and hydrate resources
+            let conrows = persistence::list_contracts(&pool, save_id).await.unwrap();
+            let taprows = persistence::list_tapeout_requests(&pool, save_id).await.unwrap();
+
+            let dom = core::World {
+                macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+                tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: Decimal::new(1,0), freq_ghz_baseline: Decimal::new(1,0), leakage_index: Decimal::new(1,0), yield_baseline: Decimal::new(9,1), wafer_cost_usd: Decimal::new(1000,0), mask_set_cost_usd: Decimal::new(5000,0), dependencies: vec![] }],
+                companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+                segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            };
+            let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+            let mut w = init_world(dom, cfg);
+            // Map into runtime resources
+            {
+                let mut book = w.resource_mut::<CapacityBook>();
+                for r in conrows {
+                    let start = chrono::NaiveDate::parse_from_str(&r.start, "%Y-%m-%d").unwrap();
+                    let end = chrono::NaiveDate::parse_from_str(&r.end, "%Y-%m-%d").unwrap();
+                    book.contracts.push(FoundryContract { foundry_id: r.foundry_id, wafers_per_month: r.wafers_per_month as u32, price_per_wafer_cents: r.price_per_wafer_cents, take_or_pay_frac: r.take_or_pay_frac, billing_cents_per_wafer: r.billing_cents_per_wafer, billing_model: Box::leak(r.billing_model.into_boxed_str()), lead_time_months: r.lead_time_months as u8, start, end });
+                }
+                let mut pipe = w.resource_mut::<Pipeline>();
+                for t in taprows {
+                    let start = chrono::NaiveDate::parse_from_str(&t.start, "%Y-%m-%d").unwrap();
+                    let ready = chrono::NaiveDate::parse_from_str(&t.ready, "%Y-%m-%d").unwrap();
+                    let spec: core::ProductSpec = serde_json::from_str(&t.product_json).unwrap();
+                    pipe.0.queue.push(core::TapeoutRequest { product: spec, tech_node: core::TechNodeId(t.tech_node), start, ready, expedite: t.expedite != 0, expedite_cost_cents: t.expedite_cost_cents });
+                }
+            }
+            // Tick month: contract billed and tapeout released (appeal rises)
+            let (snap1, _t) = run_months_in_place(&mut w, 1);
+            assert!(snap1.contract_costs_cents >= 3_000_000);
+            assert!(w.resource::<ProductAppeal>().0 > 0.0);
+        });
     }
 
     #[test]

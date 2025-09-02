@@ -2504,12 +2504,16 @@ dependencies = [
  "bevy_ecs",
  "chrono",
  "criterion",
+ "persistence",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rust_decimal",
+ "serde_json",
  "sim-ai",
  "sim-core",
  "sim-econ",
+ "sqlx",
+ "tokio",
  "tracing",
 ]
 
