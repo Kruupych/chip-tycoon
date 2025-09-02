@@ -18,7 +18,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
-    "identifier": "com.chiptycoon.app"
+    "targets": ["msi", "nsis"]
   }
 }
