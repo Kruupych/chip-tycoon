@@ -84,3 +84,24 @@ release-ui:
 
 release-all: release-cli release-ui
     VER=$(sed -n 's/^version = \"\(.*\)\"/\1/p' Cargo.toml | head -n1); ARCH=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | awk '{ if($0 ~ /mingw|msys|cygwin|windows/) print "windows-x64"; else if($0 ~ /darwin/) print "macos-x64"; else print "linux-x64" }'); OUT="dist/v$VER/$ARCH"; mkdir -p "$OUT"; if [ -f target/release/cli ]; then cp -v target/release/cli "$OUT/"; fi; rsync -a --delete --exclude 'saves' --exclude 'telemetry' assets "$OUT/" || true; cp -v README_quickstart.md "$OUT/" || true; if [ -d apps/mgmt-ui/src-tauri/target/release/bundle ]; then mkdir -p "$OUT/mgmt-ui" && cp -rv apps/mgmt-ui/src-tauri/target/release/bundle "$OUT/mgmt-ui/"; elif [ -d apps/mgmt-ui/web/src-tauri/target/release/bundle ]; then mkdir -p "$OUT/mgmt-ui" && cp -rv apps/mgmt-ui/web/src-tauri/target/release/bundle "$OUT/mgmt-ui/"; fi
+
+# Windows-only UI build (PowerShell)
+release-ui-win:
+    if [ "$(uname -s | tr '[:upper:]' '[:lower:]')" != "windows_nt" ] && [ -z "$WIN" ]; then \
+      echo "Windows UI build is skipped on non-Windows; run 'just release-ui-win' in Windows PowerShell"; \
+      exit 0; \
+    fi
+    pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1
+
+# Package Windows artifacts to zip
+package-win:
+    VER=$(sed -n 's/^version = \"\(.*\)\"/\1/p' Cargo.toml | head -n1); SRC="dist/v$VER/windows-x64"; ZIP="chip-tycoon-$VER-windows-x64.zip"; \
+    if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -Command "Compress-Archive -Force -Path '$$PWD/$SRC/*' -DestinationPath '$$PWD/$ZIP'"; else zip -r "$ZIP" "$SRC"; fi
+
+# Check Tauri environment presence
+check-tauri:
+    echo "Checking Tauri setup..."; \
+    if [ -f apps/mgmt-ui/src-tauri/tauri.conf.json ] || [ -f apps/mgmt-ui/tauri.conf.json ] || [ -f apps/mgmt-ui/src-tauri/Tauri.toml ]; then echo "- Tauri config: present"; else echo "- Tauri config: missing"; fi; \
+    if command -v node >/dev/null 2>&1; then echo "- Node: present"; else echo "- Node: missing"; fi; \
+    if command -v pnpm >/dev/null 2>&1; then echo "- pnpm: present"; else echo "- pnpm: missing"; fi; \
+    if command -v tauri >/dev/null 2>&1; then echo "- tauri CLI: present (global)"; else echo "- tauri CLI: not found (will use dev-dep)"; fi
