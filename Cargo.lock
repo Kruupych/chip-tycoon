@@ -1894,6 +1894,7 @@ dependencies = [
  "proptest",
  "rust_decimal",
  "serde",
+ "serde_json",
  "sim-core",
  "sqlx",
  "tokio",

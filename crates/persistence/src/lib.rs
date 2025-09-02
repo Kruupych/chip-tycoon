@@ -99,6 +99,113 @@ pub async fn latest_snapshot(
     }))
 }
 
+/// Persistence helpers for capacity and tapeout
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ContractRow {
+    pub foundry_id: String,
+    pub wafers_per_month: i64,
+    pub price_per_wafer_cents: i64,
+    pub take_or_pay_frac: f32,
+    pub billing_cents_per_wafer: i64,
+    pub billing_model: String,
+    pub lead_time_months: i64,
+    pub start: String,
+    pub end: String,
+}
+
+pub async fn insert_contract(pool: &Pool<Sqlite>, save_id: i64, c: &ContractRow) -> Result<i64> {
+    let rec = sqlx::query(
+        r#"INSERT INTO foundry_contracts
+            (save_id, foundry_id, wafers_per_month, price_per_wafer_cents, take_or_pay_frac, billing_cents_per_wafer, billing_model, lead_time_months, start, end)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id"#,
+    )
+    .bind(save_id)
+    .bind(&c.foundry_id)
+    .bind(c.wafers_per_month)
+    .bind(c.price_per_wafer_cents)
+    .bind(c.take_or_pay_frac)
+    .bind(c.billing_cents_per_wafer)
+    .bind(&c.billing_model)
+    .bind(c.lead_time_months)
+    .bind(&c.start)
+    .bind(&c.end)
+    .fetch_one(pool)
+    .await?;
+    Ok(rec.try_get("id").unwrap_or(0))
+}
+
+pub async fn list_contracts(pool: &Pool<Sqlite>, save_id: i64) -> Result<Vec<ContractRow>> {
+    let rows = sqlx::query(
+        r#"SELECT foundry_id, wafers_per_month, price_per_wafer_cents, take_or_pay_frac, billing_cents_per_wafer, billing_model, lead_time_months, start, end
+            FROM foundry_contracts WHERE save_id = ?1 ORDER BY id"#,
+    )
+    .bind(save_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ContractRow {
+            foundry_id: r.try_get("foundry_id").unwrap_or_default(),
+            wafers_per_month: r.try_get("wafers_per_month").unwrap_or(0),
+            price_per_wafer_cents: r.try_get("price_per_wafer_cents").unwrap_or(0),
+            take_or_pay_frac: r.try_get("take_or_pay_frac").unwrap_or(1.0),
+            billing_cents_per_wafer: r.try_get("billing_cents_per_wafer").unwrap_or(0),
+            billing_model: r.try_get("billing_model").unwrap_or_default(),
+            lead_time_months: r.try_get("lead_time_months").unwrap_or(0),
+            start: r.try_get("start").unwrap_or_default(),
+            end: r.try_get("end").unwrap_or_default(),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TapeoutRow {
+    pub product_json: String,
+    pub tech_node: String,
+    pub start: String,
+    pub ready: String,
+    pub expedite: i64,
+    pub expedite_cost_cents: i64,
+}
+
+pub async fn insert_tapeout_request(pool: &Pool<Sqlite>, save_id: i64, t: &TapeoutRow) -> Result<i64> {
+    let rec = sqlx::query(
+        r#"INSERT INTO tapeout_queue
+            (save_id, product_json, tech_node, start, ready, expedite, expedite_cost_cents)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id"#,
+    )
+    .bind(save_id)
+    .bind(&t.product_json)
+    .bind(&t.tech_node)
+    .bind(&t.start)
+    .bind(&t.ready)
+    .bind(t.expedite)
+    .bind(t.expedite_cost_cents)
+    .fetch_one(pool)
+    .await?;
+    Ok(rec.try_get("id").unwrap_or(0))
+}
+
+pub async fn list_tapeout_requests(pool: &Pool<Sqlite>, save_id: i64) -> Result<Vec<TapeoutRow>> {
+    let rows = sqlx::query(
+        r#"SELECT product_json, tech_node, start, ready, expedite, expedite_cost_cents FROM tapeout_queue WHERE save_id = ?1 ORDER BY id"#,
+    )
+    .bind(save_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| TapeoutRow {
+            product_json: r.try_get("product_json").unwrap_or_default(),
+            tech_node: r.try_get("tech_node").unwrap_or_default(),
+            start: r.try_get("start").unwrap_or_default(),
+            ready: r.try_get("ready").unwrap_or_default(),
+            expedite: r.try_get("expedite").unwrap_or(0),
+            expedite_cost_cents: r.try_get("expedite_cost_cents").unwrap_or(0),
+        })
+        .collect())
+}
+
 /// Row format for telemetry exports.
 #[derive(Clone, Debug)]
 pub struct TelemetryRow {
@@ -313,6 +420,24 @@ mod tests {
             let world2 = deserialize_world_bincode(&latest.2).unwrap();
             // Quick invariant: date preserved
             assert_eq!(world2.macro_state.date, world.macro_state.date);
+        });
+    }
+
+    #[test]
+    fn contracts_and_tapeout_persist_roundtrip() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let pool = init_db("sqlite::memory:").await.unwrap();
+            let save_id = create_save(&pool, "test", None).await.unwrap();
+            let c = ContractRow { foundry_id: "F1".into(), wafers_per_month: 3000, price_per_wafer_cents: 1000, take_or_pay_frac: 1.0, billing_cents_per_wafer: 1000, billing_model: "take_or_pay".into(), lead_time_months: 3, start: "1990-01-01".into(), end: "1991-01-01".into() };
+            let _id = insert_contract(&pool, save_id, &c).await.unwrap();
+            let rows = list_contracts(&pool, save_id).await.unwrap();
+            assert_eq!(rows[0], c);
+            let spec = sim_core::ProductSpec { kind: sim_core::ProductKind::CPU, tech_node: sim_core::TechNodeId("N90".into()), microarch: sim_core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, perf_index: 0.5, tdp_w: 65.0, bom_usd: 50.0 };
+            let t = TapeoutRow { product_json: serde_json::to_string(&spec).unwrap(), tech_node: "N90".into(), start: "1990-01-01".into(), ready: "1990-07-01".into(), expedite: 1, expedite_cost_cents: 100000 };
+            let _tid = insert_tapeout_request(&pool, save_id, &t).await.unwrap();
+            let ts = list_tapeout_requests(&pool, save_id).await.unwrap();
+            assert_eq!(ts[0].tech_node, "N90");
         });
     }
 
