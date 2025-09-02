@@ -1,1 +1,7 @@
 /target
+target/
+**/*.db
+**/*.db-journal
+saves/
+telemetry/
+crates/persistence/target/
