@@ -756,12 +756,20 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct SaveInfo { id: i64, name: String, created_at: String, progress: u32 }
+struct SaveInfo { id: i64, name: String, status: String, created_at: String, progress: u32 }
 
 async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
     use persistence as p;
     let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
-    let sid = p::create_save(&pool, &name, None).await.map_err(|e| e.to_string())?;
+    // Autosave flow: mark in_progress first
+    let is_auto = name.starts_with("auto-");
+    let sid = if is_auto {
+        p::create_save_with_status(&pool, &name, None, "in_progress")
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        p::create_save(&pool, &name, None).await.map_err(|e| e.to_string())?
+    };
     // Snapshot domain world
     let month_index = world.resource::<runtime::Stats>().months_run as i64;
     let bytes = p::serialize_world_bincode(&dom).map_err(|e| e.to_string())?;
@@ -784,6 +792,18 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
         let row = p::ReleasedRow { product_json: serde_json::to_string(r).map_err(|e| e.to_string())?, released_at: dom.macro_state.date.to_string() };
         let _ = p::insert_released_product(&pool, sid, &row).await.map_err(|e| e.to_string())?;
     }
+    // Mark done for autosave and rotate to last N=6
+    if is_auto {
+        let _ = p::update_save_status(&pool, sid, "done").await.map_err(|e| e.to_string())?;
+        const N: usize = 6;
+        if let Ok(list) = p::list_saves_by_prefix(&pool, "auto-").await {
+            if list.len() > N {
+                for old in list.into_iter().take(list.len() - N) {
+                    let _ = p::delete_save(&pool, old.id).await;
+                }
+            }
+        }
+    }
     Ok(sid)
 }
 
@@ -804,7 +824,7 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
     use persistence as p;
     let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
     // List saves by naive query since persistence doesn't expose it
-    let rows = sqlx::query("SELECT id, name, created_at FROM saves ORDER BY created_at DESC")
+    let rows = sqlx::query("SELECT id, name, status, created_at FROM saves ORDER BY created_at DESC")
         .fetch_all(&pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -812,6 +832,7 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
     for r in rows {
         let id: i64 = r.try_get("id").unwrap_or(0);
         let name: String = r.try_get("name").unwrap_or_default();
+        let status: String = r.try_get("status").unwrap_or_else(|_| "done".into());
         let created_at: String = r.try_get("created_at").unwrap_or_default();
         let progress = p::latest_snapshot(&pool, id)
             .await
@@ -819,7 +840,7 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
             .flatten()
             .map(|(_sid, m, _d, _f)| m as u32)
             .unwrap_or(0);
-        out.push(SaveInfo { id, name, created_at, progress });
+        out.push(SaveInfo { id, name, status, created_at, progress });
     }
     Ok(out)
 }
@@ -868,11 +889,15 @@ async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
 }
 
 #[tauri::command]
-fn sim_set_autosave(on: bool) -> Result<(), String> {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct AutosavePolicy { enabled: bool, max_kept: usize }
+
+#[tauri::command]
+fn sim_set_autosave(on: bool) -> Result<AutosavePolicy, String> {
     let mut g = SIM_STATE.write().unwrap();
     let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
     st.autosave = on;
-    Ok(())
+    Ok(AutosavePolicy { enabled: st.autosave, max_kept: 6 })
 }
 
 #[tauri::command]
@@ -1083,6 +1108,50 @@ mod tests {
         let _ = sim_override(OverrideReq { price_delta_frac: Some(0.05), rd_delta_cents: None, capacity_request: None, tapeout: None }).unwrap();
         let s3 = sim_state().unwrap();
         assert!(s3.pricing.asp_cents >= s2.pricing.asp_cents);
+    }
+
+    #[test]
+    fn autosave_transaction_and_rotation() {
+        // Clean DB to start fresh
+        let _ = std::fs::remove_file("./saves/main.db");
+        let _ = std::fs::remove_dir_all("./saves");
+        // Reset campaign and ensure autosave ON
+        let _ = sim_campaign_reset(Some("1990s".into())).expect("reset");
+        let _ = sim_set_autosave(true).expect("enable autosave");
+        // Run two quarters and wait for autosaves
+        let rt = tauri::async_runtime::TokioRuntime::new().expect("rt");
+        let _ = rt.block_on(sim_tick_quarter()).expect("q1");
+        let _ = rt.block_on(sim_tick_quarter()).expect("q2");
+        // Poll for autosaves to appear
+        let mut tries = 0;
+        loop {
+            let list = rt.block_on(sim_list_saves()).unwrap_or_default();
+            let autos: Vec<_> = list.into_iter().filter(|s| s.name.starts_with("auto-")).collect();
+            if autos.len() >= 2 || tries > 50 {
+                assert!(autos.len() >= 2, "expected at least 2 autosaves");
+                assert!(autos.iter().all(|s| s.status == "done"), "autosaves not done");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            tries += 1;
+        }
+        // Now run 6 more quarters and check rotation keeps only last 6
+        for _ in 0..6 {
+            let _ = rt.block_on(sim_tick_quarter()).expect("quarter");
+        }
+        // Wait for rotation to settle
+        let mut tries = 0;
+        loop {
+            let list = rt.block_on(sim_list_saves()).unwrap_or_default();
+            let autos: Vec<_> = list.into_iter().filter(|s| s.name.starts_with("auto-")).collect();
+            if autos.len() == 6 || tries > 60 {
+                assert_eq!(autos.len(), 6, "rotation should keep last 6 autosaves");
+                assert!(autos.iter().all(|s| s.status == "done"), "rotated autosaves should be done");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            tries += 1;
+        }
     }
 
     #[test]

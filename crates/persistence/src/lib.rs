@@ -46,6 +46,72 @@ pub async fn create_save(
     Ok(id)
 }
 
+/// Create a save with an explicit status (e.g., 'in_progress' for autosaves).
+pub async fn create_save_with_status(
+    pool: &Pool<Sqlite>,
+    name: &str,
+    description: Option<&str>,
+    status: &str,
+) -> Result<i64> {
+    let rec = sqlx::query(
+        r#"INSERT INTO saves (name, description, status) VALUES (?1, ?2, ?3) RETURNING id"#,
+    )
+    .bind(name)
+    .bind(description)
+    .bind(status)
+    .fetch_one(pool)
+    .await?;
+    Ok(rec.try_get("id").unwrap_or(0))
+}
+
+/// Update save status.
+pub async fn update_save_status(pool: &Pool<Sqlite>, save_id: i64, status: &str) -> Result<()> {
+    let _ = sqlx::query(r#"UPDATE saves SET status = ?1 WHERE id = ?2"#)
+        .bind(status)
+        .bind(save_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Metadata for listing saves.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SaveMeta {
+    pub id: i64,
+    pub name: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+/// List saves filtered by name prefix; ordered by created_at ascending.
+pub async fn list_saves_by_prefix(pool: &Pool<Sqlite>, prefix: &str) -> Result<Vec<SaveMeta>> {
+    let like = format!("{}%", prefix);
+    let rows = sqlx::query(
+        r#"SELECT id, name, status, created_at FROM saves WHERE name LIKE ?1 ORDER BY created_at ASC, id ASC"#,
+    )
+    .bind(like)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SaveMeta {
+            id: r.try_get("id").unwrap_or(0),
+            name: r.try_get("name").unwrap_or_default(),
+            status: r.try_get("status").unwrap_or_else(|_| "done".into()),
+            created_at: r.try_get("created_at").unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// Delete a save by id (cascades to snapshots and related tables).
+pub async fn delete_save(pool: &Pool<Sqlite>, save_id: i64) -> Result<()> {
+    let _ = sqlx::query(r#"DELETE FROM saves WHERE id = ?1"#)
+        .bind(save_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Serialize a world state using bincode.
 pub fn serialize_world_bincode(world: &core::World) -> Result<Vec<u8>> {
     Ok(bincode::serialize(world)?)
