@@ -20,7 +20,7 @@ export function App() {
 }
 
 function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
-  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
+  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError, toast } = useAppStore();
   const qc = useQueryClient();
   const [showSave, setShowSave] = useState(false);
   const [tut, setTut] = useState<TutorialDto | null>(null);
@@ -125,6 +125,9 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
+        {toast && (
+          <div style={{ position: "fixed", top: 12, right: 12, background: "#16a34a", color: "#fff", padding: "8px 12px", borderRadius: 4 }}>{toast}</div>
+        )}
         <div style={{ marginBottom: 8, color: "#666" }}>
           {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
         </div>
@@ -238,7 +241,7 @@ function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: st
 }
 
 function Campaign() {
-  const { stateDto } = useAppStore();
+  const { stateDto, showToast } = useAppStore();
   const camp = (stateDto as any)?.campaign as any;
   const [fmt, setFmt] = useState<"json"|"parquet">("json");
   const [path, setPath] = useState("telemetry/campaign_export.json");
@@ -261,7 +264,7 @@ function Campaign() {
             <option value="json">JSON</option>
             <option value="parquet">Parquet</option>
           </select>
-          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); alert("Exported to " + path); } catch(e) { alert("Export failed: "+e); } }}>{t("btn_export_report")}</button>
+          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); showToast(`Exported to ${path}`); } catch(e) { showToast("Export failed: "+e); } }}>{t("btn_export_report")}</button>
         </span>
       </div>
       {camp ? (
@@ -288,6 +291,10 @@ function Campaign() {
 
 function Markets({ onOverride }: { onOverride: (p: any) => void }) {
   const [delta, setDelta] = useState(0);
+  const { stateDto } = useAppStore();
+  const asp = stateDto?.pricing?.asp_cents ?? 0;
+  const unitCost = stateDto?.pricing?.unit_cost_cents ?? 0;
+  const expected = Math.round(asp * (1 + delta / 100));
   return (
     <div>
       <h2>Markets</h2>
@@ -300,7 +307,7 @@ function Markets({ onOverride }: { onOverride: (p: any) => void }) {
           onChange={(e) => setDelta(Number(e.target.value))}
           style={{ width: 100 }}
         />
-        <button onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
+        <button title={`Min margin: ${cents(Math.round(unitCost*1.05))} · New ASP≈ ${cents(expected)}`} onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
           Apply
         </button>
       </div>
@@ -486,16 +493,22 @@ function LineChart({ data }: { data: { m: number; revenue: number; profit: numbe
 }
 
 function RechartsLine({ data }: { data: { m: number; revenue: number; profit: number }[] }) {
+  const fmt = (v: number) => {
+    const a = Math.abs(v);
+    if (a >= 1_000_000) return `$${(v/1_000_000).toFixed(1)}M`;
+    if (a >= 1_000) return `$${(v/1_000).toFixed(1)}k`;
+    return `$${v.toFixed(0)}`;
+  };
   return (
     <div style={{ width: "100%", height: 240 }}>
       <ResponsiveContainer>
         <RLineChart data={data}>
           <XAxis dataKey="m" />
-          <YAxis />
-          <Tooltip />
+          <YAxis tickFormatter={(v)=>fmt(v as any)} width={70} />
+          <Tooltip formatter={(value: any) => fmt(value)} />
           <Legend />
-          <Line type="monotone" dataKey="revenue" stroke="#8884d8" dot={false} />
-          <Line type="monotone" dataKey="profit" stroke="#82ca9d" dot={false} />
+          <Line type="monotone" dataKey="revenue" stroke="#3b82f6" dot={false} />
+          <Line type="monotone" dataKey="profit" stroke="#10b981" dot={false} />
         </RLineChart>
       </ResponsiveContainer>
     </div>

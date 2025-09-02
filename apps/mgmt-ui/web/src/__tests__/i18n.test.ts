@@ -8,3 +8,10 @@ test("ru dictionary covers all en keys", () => {
   }
 });
 
+test("en dictionary covers all ru keys", () => {
+  const en = dicts.en as any;
+  const ru = dicts.ru as any;
+  for (const k of Object.keys(ru)) {
+    expect(typeof en[k]).toBe("string");
+  }
+});
