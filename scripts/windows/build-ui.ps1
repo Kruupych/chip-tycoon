@@ -33,7 +33,7 @@ pnpm --dir $webRoot build
 Write-Host "Running tauri build via pnpm dlx (from apps/mgmt-ui)"
 Push-Location $uiRoot
 try {
-  pnpm dlx @tauri-apps/cli@2.8.4 tauri build --project-path src-tauri --config src-tauri/tauri.conf.json
+  pnpm dlx @tauri-apps/cli@2.8.4 build --project-path src-tauri --config src-tauri/tauri.conf.json
 } finally {
   Pop-Location
 }
