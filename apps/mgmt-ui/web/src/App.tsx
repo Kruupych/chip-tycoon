@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
 import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto } from "./api";
+import { t, getLang, setLang } from "./i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -84,16 +85,22 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif" }}>
       <div style={{ width: 220, borderRight: "1px solid #ddd", padding: 12 }}>
-        <h3>Mgmt</h3>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h3>{t("app_title")}</h3>
+          <select value={getLang()} onChange={(e)=>{ setLang(e.target.value as any); (window as any).location?.reload?.(); }}>
+            <option value="en">EN</option>
+            <option value="ru">RU</option>
+          </select>
+        </div>
         <div>
           {[
-            ["dashboard", "Dashboard"],
-            ["tutorial", "Tutorial"],
-            ["campaign", "Campaign"],
-            ["markets", "Markets"],
-            ["rd", "R&D / Tapeout"],
-            ["capacity", "Capacity"],
-            ["ai", "AI Plan"],
+            ["dashboard", t("nav_dashboard")],
+            ["tutorial", t("nav_tutorial")],
+            ["campaign", t("nav_campaign")],
+            ["markets", t("nav_markets")],
+            ["rd", t("nav_rd")],
+            ["capacity", t("nav_capacity")],
+            ["ai", t("nav_ai")],
           ].map(([k, label]) => (
             <div key={k}>
               <button
@@ -111,10 +118,10 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
           ))}
         </div>
         <div style={{ marginTop: 16 }}>
-          <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>Tick Month</button>
-          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>Simulate Quarter</button>
-          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>Simulate Year</button>
-          <button style={{ marginLeft: 8 }} onClick={() => setShowSave(true)}>Save/Load…</button>
+          <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>{t("btn_tick_month")}</button>
+          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>{t("btn_sim_quarter")}</button>
+          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>{t("btn_sim_year")}</button>
+          <button style={{ marginLeft: 8 }} onClick={() => setShowSave(true)}>{t("btn_save_load")}</button>
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
@@ -237,11 +244,11 @@ function Campaign() {
   const [path, setPath] = useState("telemetry/campaign_export.json");
   return (
     <div>
-      <h2>Campaign</h2>
+      <h2>{t("nav_campaign")}</h2>
       <div style={{ marginBottom: 8 }}>
         <button onClick={() => simCampaignReset("1990s")}>Restart 1990s Campaign</button>
         <span style={{ marginLeft: 12 }}>
-          Difficulty:
+          {t("lbl_difficulty")}
           <select onChange={(e) => simCampaignSetDifficulty(e.target.value)} defaultValue={camp?.difficulty ?? "normal"} style={{ marginLeft: 6 }}>
             <option value="easy">Easy</option>
             <option value="normal">Normal</option>
@@ -254,7 +261,7 @@ function Campaign() {
             <option value="json">JSON</option>
             <option value="parquet">Parquet</option>
           </select>
-          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); alert("Exported to " + path); } catch(e) { alert("Export failed: "+e); } }}>Export Report</button>
+          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); alert("Exported to " + path); } catch(e) { alert("Export failed: "+e); } }}>{t("btn_export_report")}</button>
         </span>
       </div>
       {camp ? (
