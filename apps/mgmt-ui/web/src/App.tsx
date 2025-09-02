@@ -87,6 +87,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
       <div style={{ width: 220, borderRight: "1px solid #ddd", padding: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <h3>{t("app_title")}</h3>
+          <button title="Help" onClick={()=>window.open("docs/user-guide.md", "_blank")}>?</button>
           <select value={getLang()} onChange={(e)=>{ setLang(e.target.value as any); (window as any).location?.reload?.(); }}>
             <option value="en">EN</option>
             <option value="ru">RU</option>
