@@ -71,7 +71,13 @@ release-cli:
     cargo build -p cli --release
 
 release-ui:
-    cd apps/mgmt-ui && pnpm i && pnpm tauri build
+    if [ -f apps/mgmt-ui/package.json ]; then \
+      cd apps/mgmt-ui && pnpm i && pnpm tauri build; \
+    elif [ -f apps/mgmt-ui/web/package.json ]; then \
+      cd apps/mgmt-ui/web && pnpm i && pnpm tauri build; \
+    else \
+      echo "No package.json for UI; skipping"; \
+    fi
 
 release-all: release-cli release-ui
     VER=$(sed -n 's/^version = \"\(.*\)\"/\1/p' Cargo.toml | head -n1)
@@ -90,4 +96,6 @@ release-all: release-cli release-ui
     # Tauri bundles
     if [ -d apps/mgmt-ui/src-tauri/target/release/bundle ]; then \
       mkdir -p "$OUT/mgmt-ui" && cp -rv apps/mgmt-ui/src-tauri/target/release/bundle "$OUT/mgmt-ui/"; \
+    elif [ -d apps/mgmt-ui/web/src-tauri/target/release/bundle ]; then \
+      mkdir -p "$OUT/mgmt-ui" && cp -rv apps/mgmt-ui/web/src-tauri/target/release/bundle "$OUT/mgmt-ui/"; \
     fi
