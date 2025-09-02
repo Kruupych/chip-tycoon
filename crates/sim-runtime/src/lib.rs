@@ -963,6 +963,20 @@ fn stats_rd_boost(_stats: &Stats) -> f32 {
     0.0
 }
 
+/// Difficulty parameters resource applied by the campaign loader/UI.
+#[derive(Resource, Clone, Debug)]
+pub struct DifficultyParams {
+    pub default_take_or_pay_frac: f32,
+}
+
+impl Default for DifficultyParams {
+    fn default() -> Self {
+        Self {
+            default_take_or_pay_frac: 1.0,
+        }
+    }
+}
+
 /// AI strategy system: apply monthly tactics and quarterly plan signal.
 pub fn ai_strategy_system(
     mut stats: ResMut<Stats>,
@@ -1208,6 +1222,7 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(MarketEventConfigRes::default());
     w.insert_resource(CampaignStateRes::default());
     w.insert_resource(TutorialState::default());
+    w.insert_resource(DifficultyParams::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
     w.insert_resource(AiConfig(ai_cfg));
@@ -1467,6 +1482,11 @@ pub fn apply_capacity_request(
 ) -> String {
     let lead = world.resource::<AiConfig>().0.planner.quarter_step as u8;
     let start = world.resource::<DomainWorld>().0.macro_state.date;
+    // Read difficulty default before mutably borrowing book
+    let default_top = world
+        .get_resource::<DifficultyParams>()
+        .map(|d| d.default_take_or_pay_frac)
+        .unwrap_or(1.0);
     let mut book = world.resource_mut::<CapacityBook>();
     // compute start date by adding lead months
     let mut s = start;
@@ -1479,7 +1499,7 @@ pub fn apply_capacity_request(
         e = add_months(e, 1);
     }
     let price = billing_cents_per_wafer.unwrap_or(10_000);
-    let top = take_or_pay_frac.unwrap_or(1.0).clamp(0.0, 1.0);
+    let top = take_or_pay_frac.unwrap_or(default_top).clamp(0.0, 1.0);
     let c = FoundryContract {
         foundry_id: "FND-A".into(),
         wafers_per_month,

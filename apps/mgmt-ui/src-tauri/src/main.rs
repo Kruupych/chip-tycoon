@@ -664,7 +664,51 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
     let mut g = SIM_STATE.write().unwrap();
     let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
     if let Some(cfg) = st.world.get_resource_mut::<runtime::CampaignScenarioRes>() {
-        cfg.difficulty = Some(level);
+        cfg.difficulty = Some(level.clone());
+    }
+    // Load presets
+    #[derive(serde::Deserialize)]
+    struct Level { cash_multiplier: f32, min_margin_frac: f32, price_epsilon_frac: f32, take_or_pay_frac: f32, annual_growth_pct_multiplier: f32, event_severity_multiplier: f32 }
+    #[derive(serde::Deserialize)]
+    struct Root { levels: std::collections::HashMap<String, Level> }
+    let text = std::fs::read_to_string("assets/scenarios/difficulty.yaml").map_err(|e| e.to_string())?;
+    let root: Root = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
+    let Some(preset) = root.levels.get(&level) else { return Err("unknown difficulty".into()) };
+    // Apply to AI config
+    {
+        let mut ai = st.world.resource_mut::<runtime::AiConfig>();
+        ai.0.tactics.min_margin_frac = preset.min_margin_frac;
+        ai.0.tactics.price_epsilon_frac = preset.price_epsilon_frac;
+    }
+    // Apply to difficulty params
+    {
+        let mut dp = st.world.resource_mut::<runtime::DifficultyParams>();
+        dp.default_take_or_pay_frac = preset.take_or_pay_frac.clamp(0.0, 1.0);
+    }
+    // Scale markets growth
+    {
+        let mut markets = st.world.resource_mut::<runtime::MarketConfigRes>();
+        for s in &mut markets.segments {
+            s.annual_growth_pct *= preset.annual_growth_pct_multiplier;
+        }
+    }
+    // Scale events severity for market effects in-place
+    {
+        if let Some(mut ev) = st.world.get_resource_mut::<runtime::MarketEventConfigRes>() {
+            let mult = preset.event_severity_multiplier as f64;
+            for v in &mut ev.events {
+                if let Some(me) = v.get_mut("market_effect") {
+                    if let Some(b) = me.get_mut("base_demand_pct") { if let Some(x) = b.as_f64() { *b = serde_yaml::Value::from(x * mult); } }
+                    if let Some(e) = me.get_mut("elasticity_delta") { if let Some(x) = e.as_f64() { *e = serde_yaml::Value::from(x * mult); } }
+                }
+            }
+        }
+    }
+    // Adjust player cash multiplicatively
+    if let Some(c) = st.dom.companies.get_mut(0) {
+        let cash = c.cash_usd;
+        let m = rust_decimal::Decimal::from_f32_retain(preset.cash_multiplier as f32).unwrap_or(rust_decimal::Decimal::ONE);
+        c.cash_usd = cash * m;
     }
     Ok(())
 }
@@ -840,5 +884,52 @@ mod tests {
         let _ = sim_override(OverrideReq { price_delta_frac: Some(0.05), rd_delta_cents: None, capacity_request: None, tapeout: None }).unwrap();
         let s3 = sim_state().unwrap();
         assert!(s3.pricing.asp_cents >= s2.pricing.asp_cents);
+    }
+
+    #[test]
+    fn difficulty_presets_apply() {
+        // Reset campaign to ensure markets/events loaded
+        let _ = sim_campaign_reset(Some("1990s".into())).expect("reset");
+        // Capture baseline values
+        let (base_min_margin, base_growth, base_event): (f32, f32, f64) = {
+            let g = SIM_STATE.read().unwrap();
+            let st = g.as_ref().unwrap();
+            let ai = st.world.resource::<runtime::AiConfig>().0.clone();
+            let markets = st.world.resource::<runtime::MarketConfigRes>().clone();
+            // take first segment growth as baseline
+            let growth = markets.segments.first().map(|s| s.annual_growth_pct).unwrap_or(1.0);
+            // pick a market event base_demand_pct if any
+            let mut ev_mag = 0.0f64;
+            if let Some(ev) = st.world.get_resource::<runtime::MarketEventConfigRes>() {
+                for v in &ev.0.events {
+                    if let Some(me) = v.get("market_effect") {
+                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) { ev_mag = b; break; }
+                    }
+                }
+            }
+            (ai.tactics.min_margin_frac, growth, ev_mag)
+        };
+        // Apply hard difficulty
+        sim_campaign_set_difficulty("hard".into()).expect("apply hard");
+        // Check updated values
+        let g = SIM_STATE.read().unwrap();
+        let st = g.as_ref().unwrap();
+        let ai2 = st.world.resource::<runtime::AiConfig>().0.clone();
+        assert!(ai2.tactics.min_margin_frac >= 0.10 - 1e-6);
+        let markets2 = st.world.resource::<runtime::MarketConfigRes>().clone();
+        let growth2 = markets2.segments.first().map(|s| s.annual_growth_pct).unwrap_or(1.0);
+        assert!(growth2 <= base_growth * 0.81 + 1e-6);
+        if base_event > 0.0 {
+            // event magnitude increased by ~1.25x
+            let mut ev_mag2 = 0.0f64;
+            if let Some(ev) = st.world.get_resource::<runtime::MarketEventConfigRes>() {
+                for v in &ev.0.events {
+                    if let Some(me) = v.get("market_effect") {
+                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) { ev_mag2 = b; break; }
+                    }
+                }
+            }
+            assert!(ev_mag2 >= base_event * 1.24);
+        }
     }
 }
