@@ -30,6 +30,25 @@ pnpm --dir $webRoot add -D @tauri-apps/cli | Out-Null
 Write-Host "Building web frontend"
 pnpm --dir $webRoot build
 
+# Ensure Windows icon exists for tauri-build (icon.ico)
+$iconsDir = Join-Path $uiRoot 'src-tauri/icons'
+$icoPath = Join-Path $iconsDir 'icon.ico'
+if (-not (Test-Path $icoPath)) {
+  Write-Host "Generating default icon set for Tauri (missing icon.ico)"
+  New-Item -ItemType Directory -Force -Path $iconsDir | Out-Null
+  # Create a simple 256x256 PNG placeholder
+  $pngPath = Join-Path $iconsDir 'base.png'
+  Add-Type -AssemblyName System.Drawing
+  $bmp = New-Object System.Drawing.Bitmap 256,256
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.Clear([System.Drawing.Color]::FromArgb(255,240,240,240))
+  $g.Dispose()
+  $bmp.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  $bmp.Dispose()
+  # Generate icons via tauri CLI
+  pnpm dlx @tauri-apps/cli@2.8.4 icon $pngPath | Out-Null
+}
+
 Write-Host "Running tauri build via pnpm dlx (from apps/mgmt-ui/src-tauri)"
 Push-Location (Join-Path $uiRoot 'src-tauri')
 try {
