@@ -1,21 +1,67 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
 import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState } from "./api";
+import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export function App() {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
-  useEffect(() => {
-    // initial load lists/state
-    (async () => {
-      try {
-        setLists(await getSimLists());
-        setStateDto(await getSimState());
-      } catch (e) {}
-    })();
-  }, [setLists, setStateDto]);
   const [nav, setNav] = useState<"dashboard" | "markets" | "rd" | "capacity" | "ai">(
     "dashboard"
   );
+  const [qc] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={qc}>
+      <InnerApp nav={nav} setNav={setNav} />
+    </QueryClientProvider>
+  );
+}
+
+function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
+  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
+  const qc = useQueryClient();
+  // Lists and state queries
+  useQuery({
+    queryKey: ["sim_lists"],
+    queryFn: getSimLists,
+    onSuccess: (data) => setLists(data),
+  });
+  useQuery({
+    queryKey: ["sim_state"],
+    queryFn: getSimState,
+    onSuccess: (data) => setStateDto(data),
+  });
+  const refetchState = async () => {
+    await qc.invalidateQueries({ queryKey: ["sim_state"] });
+  };
+  // Mutations
+  const tickMut = useMutation({
+    mutationFn: async () => simTick(1),
+    onMutate: () => setBusy(true),
+    onSuccess: async (snap) => {
+      setSnapshot(snap);
+      await refetchState();
+    },
+    onError: (e: any) => setError(e?.toString?.() ?? String(e)),
+    onSettled: () => setBusy(false),
+  });
+  const quarterMut = useMutation({
+    mutationFn: async () => (window as any).__tauriInvoke?.("sim_tick_quarter") ?? (await import("@tauri-apps/api/core")).invoke("sim_tick_quarter"),
+    onMutate: () => setBusy(true),
+    onSuccess: async () => {
+      await refetchState();
+    },
+    onError: (e: any) => setError(e?.toString?.() ?? String(e)),
+    onSettled: () => setBusy(false),
+  });
+  const overrideMut = useMutation({
+    mutationFn: simOverride,
+    onMutate: () => setBusy(true),
+    onSuccess: async () => {
+      await refetchState();
+    },
+    onError: (e: any) => setError(e?.toString?.() ?? String(e)),
+    onSettled: () => setBusy(false),
+  });
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif" }}>
       <div style={{ width: 220, borderRight: "1px solid #ddd", padding: 12 }}>
@@ -44,25 +90,8 @@ export function App() {
           ))}
         </div>
         <div style={{ marginTop: 16 }}>
-          <button
-            disabled={loading || isBusy}
-            onClick={async () => {
-              setLoading(true);
-              setBusy(true);
-              try {
-                const snap = await simTick(1);
-                setSnapshot(snap);
-                setStateDto(await getSimState());
-              } catch (e: any) {
-                setError(e?.toString?.() ?? String(e));
-              } finally {
-                setLoading(false);
-                setBusy(false);
-              }
-            }}
-          >
-            Tick Month
-          </button>
+          <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>Tick Month</button>
+          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>Simulate Quarter</button>
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
@@ -70,10 +99,10 @@ export function App() {
           {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
         </div>
         {nav === "dashboard" && <Dashboard />}
-        {nav === "markets" && <Markets />}
-        {nav === "rd" && <RD />}
-        {nav === "capacity" && <Capacity />}
-        {nav === "ai" && <AIPlan />}
+        {nav === "markets" && <Markets onOverride={(p)=>overrideMut.mutate(p as any)} />}
+        {nav === "rd" && <RD onOverride={(p)=>overrideMut.mutate(p as any)} />}
+        {nav === "capacity" && <Capacity onOverride={(p)=>overrideMut.mutate(p as any)} />}
+        {nav === "ai" && <AIPlan onQuarter={() => quarterMut.mutate()} onOverride={(p)=>overrideMut.mutate(p as any)} />}
       </div>
     </div>
   );
@@ -112,7 +141,7 @@ function Dashboard() {
   );
 }
 
-function Markets() {
+function Markets({ onOverride }: { onOverride: (p: any) => void }) {
   const [delta, setDelta] = useState(0);
   return (
     <div>
@@ -126,12 +155,7 @@ function Markets() {
           onChange={(e) => setDelta(Number(e.target.value))}
           style={{ width: 100 }}
         />
-        <button
-          onClick={async () => {
-            const resp = await simOverride({ price_delta_frac: delta / 100 });
-            alert(`New ASP: ${cents(resp.asp_cents)}`);
-          }}
-        >
+        <button onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
           Apply
         </button>
       </div>
@@ -139,7 +163,7 @@ function Markets() {
   );
 }
 
-function RD() {
+function RD({ onOverride }: { onOverride: (p: any) => void }) {
   const [rd, setRd] = useState(0);
   const [expedite, setExpedite] = useState(false);
   const [tech, setTech] = useState("N90");
@@ -150,26 +174,20 @@ function RD() {
       <div>
         <label>R&D Δ (cents/mo): </label>
         <input type="number" value={rd} onChange={(e) => setRd(Number(e.target.value))} />
-        <button onClick={async () => {
-          const resp = await simOverride({ rd_delta_cents: rd });
-          alert(`New RD budget: ${resp.rd_budget_cents}c/mo`);
-        }}>Apply</button>
+        <button onClick={() => onOverride({ rd_delta_cents: rd })}>Apply</button>
       </div>
       <div style={{ marginTop: 12 }}>
         <label>Tech node: </label>
         <input value={tech} onChange={(e) => setTech(e.target.value)} />
         <label> Expedite </label>
         <input type="checkbox" checked={expedite} onChange={(e) => setExpedite(e.target.checked)} />
-        <button onClick={async () => {
-          const resp = await simOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } });
-          alert(`Tapeout ready: ${resp.tapeout_ready}`);
-        }}>Queue Tapeout</button>
+        <button onClick={() => onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } })}>Queue Tapeout</button>
       </div>
     </div>
   );
 }
 
-function Capacity() {
+function Capacity({ onOverride }: { onOverride: (p: any) => void }) {
   const [wpm, setWpm] = useState(1000);
   const [months, setMonths] = useState(12);
   return (
@@ -181,27 +199,43 @@ function Capacity() {
         <input type="number" value={wpm} onChange={(e) => setWpm(Number(e.target.value))} />
         <label> Months: </label>
         <input type="number" value={months} onChange={(e) => setMonths(Number(e.target.value))} />
-        <button onClick={async () => {
-          const resp = await simOverride({ capacity_request: { wafers_per_month: wpm, months } });
-          alert(resp.capacity_summary);
-        }}>Request</button>
+        <button onClick={() => onOverride({ capacity_request: { wafers_per_month: wpm, months } })}>Request</button>
       </div>
     </div>
   );
 }
 
-function AIPlan() {
+function AIPlan({ onQuarter, onOverride }: { onQuarter: () => void; onOverride: (p: any) => void }) {
+  const [plan, setPlan] = useState<{ decisions: string[]; expected_score: number }>();
+  useEffect(() => { (async () => { setPlan(await simPlanQuarter()); })(); }, []);
   return (
     <div>
       <h2>AI Plan</h2>
-      <button
-        onClick={async () => {
-          const p = await simPlanQuarter();
-          alert(`${p.decisions.join(", ")} (score ${p.expected_score})`);
-        }}
-      >
-        Fetch
-      </button>
+      <div style={{ marginBottom: 8 }}>
+        <button onClick={onQuarter}>Simulate Quarter</button>
+      </div>
+      {plan && (
+        <div>
+          <div>Score: {plan.expected_score.toFixed(3)}</div>
+          <ul>
+            {plan.decisions.map((d, i) => (
+              <li key={i}>{d}</li>
+            ))}
+          </ul>
+          <button onClick={() => {
+            // heuristic mapping: if decision starts with ASP, apply price; if Capacity, add capacity; if Tapeout, schedule tapeout
+            const top = plan.decisions[0] || "";
+            if (top.startsWith("ASP")) {
+              const sign = top.includes("-") ? -1 : top.includes("+") ? 1 : 0;
+              onOverride({ price_delta_frac: 0.05 * sign });
+            } else if (top.startsWith("Capacity+")) {
+              onOverride({ capacity_request: { wafers_per_month: 1000, months: 12 } });
+            } else if (top.startsWith("Tapeout")) {
+              onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: "N90", expedite: top.includes("expedite") } });
+            }
+          }}>Apply Top Decision</button>
+        </div>
+      )}
     </div>
   );
 }
