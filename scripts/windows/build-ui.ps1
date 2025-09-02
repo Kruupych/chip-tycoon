@@ -31,7 +31,7 @@ Write-Host "Building web frontend"
 pnpm --dir $webRoot build
 
 Write-Host "Running pnpm tauri build (from web with explicit config)"
-pnpm --dir $webRoot tauri build --config ../src-tauri/tauri.conf.json
+pnpm --dir $webRoot exec tauri build --config ../src-tauri/tauri.conf.json
 
 # Compute version from root Cargo.toml
 $cargoToml = Get-Content (Join-Path $root 'Cargo.toml') -Raw
