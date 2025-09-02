@@ -44,6 +44,23 @@ Chip Tycoon — экономико-технологический симулят
   - Скорость и качество планировщика: `planner.beam_width` (3–5) и `planner.months` (24–36). Чем больше — тем лучше, но медленнее.
 
 Изменения конфигурации применяются при старте; значения по умолчанию вшиты и используются всегда, если внешний файл недоступен.
+
+## Capacity & Tapeout
+
+- Foundry Contracts: `sim-runtime` хранит `CapacityBook` с контрактами (`foundry_id`, `wafers_per_month`, `price_per_wafer_cents`, `lead_time_months`, `start`, `end`). Система `foundry_capacity_system` считает суммарную мощность исходя из базовой и активных контрактов на текущую дату.
+- AI → Capacity: Планировщик (раз в квартал) генерирует `RequestCapacity`, который записывается в `CapacityBook` как контракт, начинающийся через `lead_time` (по умолчанию использован квартальный шаг, 3 мес.) и длительностью ~1 год.
+- Tapeout Queue: В `sim-core` добавлены `TapeoutRequest` и `ProductPipeline`. В `sim-runtime` ресурс `Pipeline` и система `tapeout_system` перемещают заявки в `released` при наступлении даты `ready` и увеличивают метрику привлекательности продукта. Действие ИИ `ScheduleTapeout { expedite }` создаёт заявку; `expedite=true` сокращает срок и списывает ускоренную стоимость из кэша.
+
+По умолчанию параметры контрактов и tapeout — простые и детерминированные; их можно расширять отдельной конфигурацией.
+
+## AI defaults (кратко)
+
+- planner.beam_width: 3
+- planner.months: 24
+- planner.quarter_step: 3
+- planner.price_step_frac (ε): 0.05
+- tactics.share_drop_delta (δ): 0.05
+- tactics.min_margin_frac: 0.05
 - В CI проверяются fmt, clippy и тесты.
  - Артефакты рантайма (saves/, telemetry/, *.db) игнорируются git.
 
