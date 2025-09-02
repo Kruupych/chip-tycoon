@@ -70,8 +70,20 @@ release-ui:
     cd apps/mgmt-ui && pnpm i && pnpm tauri build
 
 release-all: release-cli release-ui
-    mkdir -p dist
-    cp -v target/release/cli dist/cli || true
+    VER=$(sed -n 's/^version = \"\(.*\)\"/\1/p' Cargo.toml | head -n1)
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    ARCH=linux-x64
+    if [ "$OS" = "linux" ]; then ARCH=linux-x64; fi
+    if [ "$OS" = "windows_nt" ]; then ARCH=windows-x64; fi
+    OUT="dist/v$VER/$ARCH"
+    mkdir -p "$OUT"
+    # CLI binary
+    if [ -f target/release/cli ]; then cp -v target/release/cli "$OUT/"; fi
+    # Assets
+    rsync -a --delete --exclude 'saves' --exclude 'telemetry' assets "$OUT/" || true
+    # Quickstart
+    cp -v README_quickstart.md "$OUT/" || true
+    # Tauri bundles
     if [ -d apps/mgmt-ui/src-tauri/target/release/bundle ]; then \
-      mkdir -p dist/mgmt-ui && cp -rv apps/mgmt-ui/src-tauri/target/release/bundle dist/mgmt-ui/; \
+      mkdir -p "$OUT/mgmt-ui" && cp -rv apps/mgmt-ui/src-tauri/target/release/bundle "$OUT/mgmt-ui/"; \
     fi
