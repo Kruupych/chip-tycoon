@@ -17,19 +17,24 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 
 if (Test-Path (Join-Path $webRoot 'package.json')) {
   Write-Host "Installing web deps"
-  pnpm -C $webRoot i
+  pnpm --dir $webRoot i
 } elseif (Test-Path (Join-Path $uiRoot 'package.json')) {
   Write-Host "Installing UI deps"
-  pnpm -C $uiRoot i
+  pnpm --dir $uiRoot i
 }
 
 # Ensure tauri cli
 Write-Host "Ensuring @tauri-apps/cli is present"
-pnpm -C $uiRoot add -D @tauri-apps/cli
+pnpm --dir $uiRoot add -D @tauri-apps/cli | Out-Null
 
 # Build Tauri
 Write-Host "Running pnpm tauri build"
-pnpm -C $uiRoot tauri build
+Push-Location $uiRoot
+try {
+  pnpm tauri build
+} finally {
+  Pop-Location
+}
 
 # Compute version from root Cargo.toml
 $cargoToml = Get-Content (Join-Path $root 'Cargo.toml') -Raw
@@ -46,4 +51,3 @@ if (Test-Path $bundle1) {
   Write-Warning "No Tauri bundle output found at $bundle1"
 }
 Write-Host "[tauri] Build complete: $dest" -ForegroundColor Green
-

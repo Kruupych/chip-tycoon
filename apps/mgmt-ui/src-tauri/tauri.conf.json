@@ -4,7 +4,7 @@
   "identifier": "com.chiptycoon.app",
   "version": "0.1.0",
   "build": {
-    "beforeBuildCommand": "pnpm -C web build",
+    "beforeBuildCommand": "pnpm --dir ../web build",
     "frontendDist": "../web/dist"
   },
   "app": {
@@ -22,4 +22,3 @@
     "identifier": "com.chiptycoon.app"
   }
 }
-

@@ -44,11 +44,13 @@ if (-not (Test-Path (Join-Path $uiRoot 'package.json'))) {
 }
 Push-Location $uiRoot
 try {
-  if (-not (Test-Path 'node_modules')) { pnpm i }
+  if (-not (Test-Path 'package.json')) {
+    Write-Host "Initializing package.json in apps/mgmt-ui"
+    pnpm init -y | Out-Null
+  }
   Write-Host "Ensuring @tauri-apps/cli is installed (dev dep)"
-  pnpm add -D @tauri-apps/cli
+  pnpm add -D @tauri-apps/cli | Out-Null
 } finally {
   Pop-Location
 }
 Write-Host "[tauri] Prerequisite check complete." -ForegroundColor Green
-
