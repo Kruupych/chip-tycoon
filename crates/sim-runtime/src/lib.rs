@@ -8,7 +8,7 @@ use bevy_ecs::prelude::*;
 use chrono::Datelike;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use rust_decimal::{prelude::{ToPrimitive, FromPrimitive}, Decimal};
 use sim_ai as ai;
 use sim_core as core;
 use tracing::info;
@@ -209,7 +209,7 @@ pub fn finance_system(stats: ResMut<Stats>) {
 /// Finance: charge foundry contracts monthly according to billing model.
 pub fn finance_system_billing(
     mut stats: ResMut<Stats>,
-    dom: Res<DomainWorld>,
+    mut dom: ResMut<DomainWorld>,
     cap: Res<Capacity>,
     book: Res<CapacityBook>,
 ) {
@@ -234,6 +234,14 @@ pub fn finance_system_billing(
         total_cost_cents = total_cost_cents.saturating_add(cost);
     }
     stats.contract_costs_cents = stats.contract_costs_cents.saturating_add(total_cost_cents);
+    // Deduct from cash of the first company for now
+    if total_cost_cents > 0 {
+        if let Some(c) = dom.0.companies.first_mut() {
+            let dec = Decimal::from_i64(total_cost_cents).unwrap_or(Decimal::ZERO)
+                / Decimal::from(100u64);
+            c.cash_usd -= dec;
+        }
+    }
 }
 
 /// Advance tapeout queue and update product appeal when products are released.
@@ -744,12 +752,39 @@ mod tests {
     #[test]
     fn stronger_product_sells_more() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
-            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: Decimal::new(1,0), freq_ghz_baseline: Decimal::new(1,0), leakage_index: Decimal::new(1,0), yield_baseline: Decimal::new(9,1), wafer_cost_usd: Decimal::new(1000,0), mask_set_cost_usd: Decimal::new(5000,0), dependencies: vec![] }],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: Decimal::new(1, 0),
+                freq_ghz_baseline: Decimal::new(1, 0),
+                leakage_index: Decimal::new(1, 0),
+                yield_baseline: Decimal::new(9, 1),
+                wafer_cost_usd: Decimal::new(1000, 0),
+                mask_set_cost_usd: Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 42 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        };
         // World A: weaker product
         let mut wa = init_world(dom.clone(), cfg.clone());
         {
@@ -940,16 +975,30 @@ mod tests {
     fn take_or_pay_bills_even_when_underused() {
         use chrono::Datelike;
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
             segments: vec![],
         };
-        let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+        let cfg = core::SimConfig {
+            tick_days: 30,
+            rng_seed: 1,
+        };
         let mut w = init_world(dom.clone(), cfg);
         // Add an active contract for this month
         let start = dom.macro_state.date;
-        let end = chrono::NaiveDate::from_ymd_opt(start.year(), start.month(), start.day()).unwrap();
+        let end =
+            chrono::NaiveDate::from_ymd_opt(start.year(), start.month(), start.day()).unwrap();
         {
             let mut book = w.resource_mut::<CapacityBook>();
             book.contracts.push(FoundryContract {
@@ -975,6 +1024,49 @@ mod tests {
         sched.run(&mut w);
         let stats = w.resource::<Stats>();
         // Expect billed: 3000 * 1000 cents
+        assert_eq!(stats.contract_costs_cents, 3_000_000);
+        // Cash decreased by $30,000.00
+        let cash = w.resource::<DomainWorld>().0.companies.first().unwrap().cash_usd;
+        assert!(cash < Decimal::new(1_000_000, 0));
+    }
+
+    #[test]
+    fn take_or_pay_bills_full_even_when_partially_used() {
+        use chrono::Datelike;
+        let dom = core::World {
+            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            tech_tree: vec![],
+            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            segments: vec![],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 1 };
+        let mut w = init_world(dom.clone(), cfg);
+        let start = dom.macro_state.date;
+        let end = chrono::NaiveDate::from_ymd_opt(start.year(), start.month(), start.day()).unwrap();
+        {
+            let mut book = w.resource_mut::<CapacityBook>();
+            book.contracts.push(FoundryContract {
+                foundry_id: "F1".into(),
+                wafers_per_month: 3000,
+                price_per_wafer_cents: 1000,
+                take_or_pay_frac: 1.0,
+                billing_cents_per_wafer: 1000,
+                billing_model: "take_or_pay",
+                lead_time_months: 0,
+                start,
+                end,
+            });
+        }
+        // Partial usage: 1000 wafers used
+        {
+            let mut cap = w.resource_mut::<Capacity>();
+            cap.wafers_per_month = 1000;
+        }
+        let mut sched = bevy_ecs::schedule::Schedule::default();
+        sched.add_systems(finance_system_billing);
+        sched.run(&mut w);
+        let stats = w.resource::<Stats>();
+        // Still billed 3000
         assert_eq!(stats.contract_costs_cents, 3_000_000);
     }
 

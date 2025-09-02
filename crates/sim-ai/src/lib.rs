@@ -671,7 +671,11 @@ pub struct ProductWeights {
 
 impl Default for ProductWeights {
     fn default() -> Self {
-        Self { perf: 0.7, price_rel: 0.0, appeal: 0.3 }
+        Self {
+            perf: 0.7,
+            price_rel: 0.0,
+            appeal: 0.3,
+        }
     }
 }
 

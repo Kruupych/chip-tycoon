@@ -168,7 +168,11 @@ pub struct TapeoutRow {
     pub expedite_cost_cents: i64,
 }
 
-pub async fn insert_tapeout_request(pool: &Pool<Sqlite>, save_id: i64, t: &TapeoutRow) -> Result<i64> {
+pub async fn insert_tapeout_request(
+    pool: &Pool<Sqlite>,
+    save_id: i64,
+    t: &TapeoutRow,
+) -> Result<i64> {
     let rec = sqlx::query(
         r#"INSERT INTO tapeout_queue
             (save_id, product_json, tech_node, start, ready, expedite, expedite_cost_cents)
@@ -429,12 +433,43 @@ mod tests {
         rt.block_on(async move {
             let pool = init_db("sqlite::memory:").await.unwrap();
             let save_id = create_save(&pool, "test", None).await.unwrap();
-            let c = ContractRow { foundry_id: "F1".into(), wafers_per_month: 3000, price_per_wafer_cents: 1000, take_or_pay_frac: 1.0, billing_cents_per_wafer: 1000, billing_model: "take_or_pay".into(), lead_time_months: 3, start: "1990-01-01".into(), end: "1991-01-01".into() };
+            let c = ContractRow {
+                foundry_id: "F1".into(),
+                wafers_per_month: 3000,
+                price_per_wafer_cents: 1000,
+                take_or_pay_frac: 1.0,
+                billing_cents_per_wafer: 1000,
+                billing_model: "take_or_pay".into(),
+                lead_time_months: 3,
+                start: "1990-01-01".into(),
+                end: "1991-01-01".into(),
+            };
             let _id = insert_contract(&pool, save_id, &c).await.unwrap();
             let rows = list_contracts(&pool, save_id).await.unwrap();
             assert_eq!(rows[0], c);
-            let spec = sim_core::ProductSpec { kind: sim_core::ProductKind::CPU, tech_node: sim_core::TechNodeId("N90".into()), microarch: sim_core::MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false }, die_area_mm2: 100.0, perf_index: 0.5, tdp_w: 65.0, bom_usd: 50.0 };
-            let t = TapeoutRow { product_json: serde_json::to_string(&spec).unwrap(), tech_node: "N90".into(), start: "1990-01-01".into(), ready: "1990-07-01".into(), expedite: 1, expedite_cost_cents: 100000 };
+            let spec = sim_core::ProductSpec {
+                kind: sim_core::ProductKind::CPU,
+                tech_node: sim_core::TechNodeId("N90".into()),
+                microarch: sim_core::MicroArch {
+                    ipc_index: 1.0,
+                    pipeline_depth: 10,
+                    cache_l1_kb: 64,
+                    cache_l2_mb: 1.0,
+                    chiplet: false,
+                },
+                die_area_mm2: 100.0,
+                perf_index: 0.5,
+                tdp_w: 65.0,
+                bom_usd: 50.0,
+            };
+            let t = TapeoutRow {
+                product_json: serde_json::to_string(&spec).unwrap(),
+                tech_node: "N90".into(),
+                start: "1990-01-01".into(),
+                ready: "1990-07-01".into(),
+                expedite: 1,
+                expedite_cost_cents: 100000,
+            };
             let _tid = insert_tapeout_request(&pool, save_id, &t).await.unwrap();
             let ts = list_tapeout_requests(&pool, save_id).await.unwrap();
             assert_eq!(ts[0].tech_node, "N90");
