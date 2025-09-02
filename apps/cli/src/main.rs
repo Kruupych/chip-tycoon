@@ -9,11 +9,18 @@ use sim_core::*;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
 
-fn parse_args() -> (Option<String>, Option<u32>, Option<String>, Option<String>) {
+fn parse_args() -> (
+    Option<String>,
+    Option<u32>,
+    Option<String>,
+    Option<String>,
+    bool,
+) {
     let mut scenario: Option<String> = None;
     let mut years: Option<u32> = None;
     let mut campaign: Option<String> = None;
     let mut export_path: Option<String> = None;
+    let mut export_dry_run: bool = true; // default to dry-run for export
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -21,10 +28,15 @@ fn parse_args() -> (Option<String>, Option<u32>, Option<String>, Option<String>)
             "--years" => years = it.next().and_then(|s| s.parse().ok()),
             "--campaign" => campaign = it.next(),
             "--export-campaign" => export_path = it.next(),
+            "--export-dry-run" => {
+                if let Some(v) = it.next() {
+                    export_dry_run = v == "1" || v.eq_ignore_ascii_case("true");
+                }
+            }
             _ => {}
         }
     }
-    (scenario, years, campaign, export_path)
+    (scenario, years, campaign, export_path, export_dry_run)
 }
 
 fn minimal_world() -> World {
@@ -103,7 +115,7 @@ fn main() -> Result<()> {
         .with_max_level(Level::INFO)
         .init();
 
-    let (scenario, years, campaign, export_path) = parse_args();
+    let (scenario, years, campaign, export_path, export_dry_run) = parse_args();
     info!(?scenario, ?years, ?campaign, ?export_path, "starting CLI");
 
     if let Some(camp) = campaign {
@@ -157,22 +169,51 @@ fn main() -> Result<()> {
                 goals: Vec<String>,
             }
             let mut rows: Vec<Row> = Vec::with_capacity(months as usize);
+            // Choose simulation target: dry-run clone or in-place
+            let mut target_world = if export_dry_run {
+                Some(sim_runtime::clone_world_state(&ecs))
+            } else {
+                None
+            };
             for _ in 0..months {
-                let (_snap, _t) = sim_runtime::run_months_in_place(&mut ecs, 1);
-                let dom = ecs.resource::<sim_runtime::DomainWorld>();
-                let stats = ecs.resource::<sim_runtime::Stats>();
-                let pricing = ecs.resource::<sim_runtime::Pricing>();
+                if let Some(ref mut w) = target_world {
+                    let (_snap, _t) = sim_runtime::run_months_in_place(w, 1);
+                } else {
+                    let (_snap, _t) = sim_runtime::run_months_in_place(&mut ecs, 1);
+                }
+                let world_ref = target_world.as_ref();
+                let (dom, stats, pricing) = if let Some(w) = world_ref {
+                    (
+                        w.resource::<sim_runtime::DomainWorld>(),
+                        w.resource::<sim_runtime::Stats>(),
+                        w.resource::<sim_runtime::Pricing>(),
+                    )
+                } else {
+                    (
+                        ecs.resource::<sim_runtime::DomainWorld>(),
+                        ecs.resource::<sim_runtime::Stats>(),
+                        ecs.resource::<sim_runtime::Pricing>(),
+                    )
+                };
                 let date = dom.0.macro_state.date;
                 // Active mods summary
                 let mut active_list: Vec<String> = Vec::new();
-                if let Some(me) = ecs.get_non_send_resource::<sim_runtime::ModEngineRes>() {
+                if let Some(me) = if let Some(w) = world_ref {
+                    w.get_non_send_resource::<sim_runtime::ModEngineRes>()
+                } else {
+                    ecs.get_non_send_resource::<sim_runtime::ModEngineRes>()
+                } {
                     for (id, start, end) in me.engine.active_effects_summary() {
                         if date >= start && date < end {
                             active_list.push(id.clone());
                         }
                     }
                 }
-                if let Some(mm) = ecs.get_resource::<sim_runtime::MarketModEffects>() {
+                if let Some(mm) = if let Some(w) = world_ref {
+                    w.get_resource::<sim_runtime::MarketModEffects>()
+                } else {
+                    ecs.get_resource::<sim_runtime::MarketModEffects>()
+                } {
                     for e in &mm.0 {
                         if date >= e.start && date < e.end {
                             active_list.push(e.id.clone());
@@ -181,7 +222,11 @@ fn main() -> Result<()> {
                 }
                 // Goals status strings
                 let mut goals: Vec<String> = Vec::new();
-                if let Some(st) = ecs.get_resource::<sim_runtime::CampaignStateRes>() {
+                if let Some(st) = if let Some(w) = world_ref {
+                    w.get_resource::<sim_runtime::CampaignStateRes>()
+                } else {
+                    ecs.get_resource::<sim_runtime::CampaignStateRes>()
+                } {
                     for (i, stg) in st.goal_status.iter().enumerate() {
                         goals.push(format!("g{}:{:?}", i, stg));
                     }

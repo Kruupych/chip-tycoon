@@ -877,8 +877,9 @@ fn sim_set_autosave(on: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), String> {
-    let mut g = SIM_STATE.write().unwrap();
-    let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    // Always perform a dry-run export: clone the current world and simulate on the clone.
+    let g = SIM_STATE.read().unwrap();
+    let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
     // Determine months remaining until campaign end if present, else export 24 months
     let months = if let Some(cfg) = st.world.get_resource::<runtime::CampaignScenarioRes>() {
         let today = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
@@ -886,14 +887,16 @@ fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), Strin
         ((end.year() - today.year()) * 12 + (end.month() as i32 - today.month() as i32)).max(0) as u32
     } else { 24 };
     if months == 0 { return Err("no months to simulate".into()); }
+    // Build a clone and run months in memory
+    let mut dry = runtime::clone_world_state(&st.world);
     #[derive(serde::Serialize)]
     struct Row { date: String, month_index: u32, cash_cents: i64, revenue_cents: i64, cogs_cents: i64, profit_cents: i64, asp_cents: i64, unit_cost_cents: i64, share: f32, output_units: u64, inventory_units: u64 }
     let mut rows: Vec<Row> = Vec::with_capacity(months as usize);
     for _ in 0..months {
-        let (_s, _t) = runtime::run_months_in_place(&mut st.world, 1);
-        let dom = st.world.resource::<runtime::DomainWorld>();
-        let stats = st.world.resource::<runtime::Stats>();
-        let pricing = st.world.resource::<runtime::Pricing>();
+        let (_s, _t) = runtime::run_months_in_place(&mut dry, 1);
+        let dom = dry.resource::<runtime::DomainWorld>();
+        let stats = dry.resource::<runtime::Stats>();
+        let pricing = dry.resource::<runtime::Pricing>();
         let date = dom.0.macro_state.date;
         rows.push(Row { date: date.to_string(), month_index: stats.months_run, cash_cents: persistence::decimal_to_cents_i64(dom.0.companies[0].cash_usd).unwrap_or(0), revenue_cents: persistence::decimal_to_cents_i64(stats.revenue_usd).unwrap_or(0), cogs_cents: persistence::decimal_to_cents_i64(stats.cogs_usd).unwrap_or(0), profit_cents: persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0), asp_cents: persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0), unit_cost_cents: persistence::decimal_to_cents_i64(pricing.unit_cost_usd).unwrap_or(0), share: stats.market_share, output_units: stats.output_units, inventory_units: stats.inventory_units });
     }
@@ -1030,6 +1033,30 @@ mod tests {
         let g = SIM_STATE.read().unwrap();
         let world = &g.as_ref().unwrap().world;
         assert!(!world.resource::<runtime::Pipeline>().0.released.is_empty());
+    }
+
+    #[test]
+    fn export_campaign_is_dry_run_and_file_valid() {
+        // Reset campaign to a known state
+        let _ = sim_campaign_reset(Some("1990s".into())).expect("reset");
+        // Capture KPI hash before
+        let s1 = sim_state().expect("state before");
+        let kpi_before = serde_json::to_string(&s1.kpi).expect("ser kpi");
+        // Export to JSON in telemetry dir
+        let path = "telemetry/test_export_campaign.json".to_string();
+        let _ = std::fs::remove_file(&path);
+        sim_export_campaign(path.clone(), Some("json".into())).expect("export");
+        // State unchanged
+        let s2 = sim_state().expect("state after");
+        let kpi_after = serde_json::to_string(&s2.kpi).expect("ser kpi2");
+        assert_eq!(kpi_after, kpi_before, "KPI changed after dry-run export");
+        assert_eq!(s2.month_index, s1.month_index, "month index changed after export");
+        // File valid JSON of array of rows
+        let text = std::fs::read_to_string(&path).expect("read export");
+        #[derive(serde::Deserialize)]
+        struct Row { date: String, month_index: u32, cash_cents: i64, revenue_cents: i64, cogs_cents: i64, profit_cents: i64, asp_cents: i64, unit_cost_cents: i64, share: f32, output_units: u64, inventory_units: u64 }
+        let rows: Vec<Row> = serde_json::from_str(&text).expect("parse json");
+        assert!(!rows.is_empty(), "no rows exported");
     }
 
     #[test]

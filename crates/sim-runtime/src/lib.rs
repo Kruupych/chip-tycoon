@@ -1338,6 +1338,81 @@ pub fn run_months_in_place(world: &mut World, months: u32) -> (SimSnapshot, Vec<
     (snap, telemetry)
 }
 
+/// Create a deep-cloned running world suitable for dry-run simulation without
+/// mutating the original ECS world. Non-send mod engine is re-initialized.
+pub fn clone_world_state(src: &World) -> World {
+    // Clone domain and config via resources
+    let dom = src.resource::<DomainWorld>().0.clone();
+    let cfg = src.resource::<SimConfig>().0.clone();
+    let mut w = init_world(dom, cfg);
+    // Clone common resources where present
+    if let Some(r) = src.get_resource::<Stats>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<Capacity>() {
+        w.insert_resource(Capacity {
+            wafers_per_month: r.wafers_per_month,
+        });
+    }
+    if let Some(r) = src.get_resource::<CapacityBook>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<Pricing>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<ProductAppeal>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<ActiveProduct>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<Pipeline>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<RnDBudgetCents>() {
+        w.insert_resource(*r);
+    }
+    if let Some(r) = src.get_resource::<FinanceConfig>() {
+        w.insert_resource(*r);
+    }
+    if let Some(r) = src.get_resource::<FinanceEvents>() {
+        w.insert_resource(*r);
+    }
+    if let Some(r) = src.get_resource::<MarketConfigRes>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<MarketTrends>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<MarketModEffects>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<MarketEventConfigRes>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<CampaignScenarioRes>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<CampaignStateRes>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<TutorialState>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<DifficultyParams>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<AiConfig>() {
+        w.insert_resource(r.clone());
+    }
+    if let Some(r) = src.get_resource::<RngResource>() {
+        w.insert_resource(RngResource(r.0.clone()));
+    }
+    // NonSend mod engine: re-initialize from the same root
+    w.insert_non_send_resource(ModEngineRes::new("assets/mods"));
+    w
+}
+
 fn build_snapshot(world: &World) -> SimSnapshot {
     let stats = world.resource::<Stats>();
     let pricing = world.resource::<Pricing>();
