@@ -58,7 +58,7 @@ export type SimStateDto = {
   date: string;
   month_index: number;
   companies: { name: string; cash_cents: number; debt_cents: number }[];
-  segments: { name: string; base_demand_units: number; price_elasticity: number }[];
+  segments: { name: string; base_demand_units: number; price_elasticity: number; base_demand_t: number; ref_price_t_cents: number; elasticity: number; trend_pct: number; sold_units: number }[];
   pricing: { asp_cents: number; unit_cost_cents: number };
   kpi: {
     cash_cents: number;
@@ -104,4 +104,16 @@ export async function getSimState() {
 
 export async function getSimLists() {
   return invoke<SimListsDto>("sim_lists");
+}
+
+export type CampaignDto = { status: string; goals: { kind: string; desc: string; progress: number; deadline: string; done: boolean }[]; start: string; end: string };
+export async function simCampaignReset(which?: string) {
+  return invoke("sim_campaign_reset", { which });
+}
+export type BalanceInfo = { segments: SimStateDto["segments"]; active_mods: { id: string; kind: string; target: string; start: string; end: string }[] };
+export async function simBalanceInfo() {
+  return invoke<BalanceInfo>("sim_balance_info");
+}
+export async function simCampaignSetDifficulty(level: string) {
+  return invoke("sim_campaign_set_difficulty", { level });
 }

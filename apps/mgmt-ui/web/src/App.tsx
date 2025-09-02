@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty } from "./api";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 export function App() {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
-  const [nav, setNav] = useState<"dashboard" | "markets" | "rd" | "capacity" | "ai">(
+  const [nav, setNav] = useState<"dashboard" | "campaign" | "markets" | "rd" | "capacity" | "ai">(
     "dashboard"
   );
   const [qc] = useState(() => new QueryClient());
@@ -53,6 +54,15 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onError: (e: any) => setError(e?.toString?.() ?? String(e)),
     onSettled: () => setBusy(false),
   });
+  const yearMut = useMutation({
+    mutationFn: async () => simTick(12),
+    onMutate: () => setBusy(true),
+    onSuccess: async () => {
+      await refetchState();
+    },
+    onError: (e: any) => setError(e?.toString?.() ?? String(e)),
+    onSettled: () => setBusy(false),
+  });
   const overrideMut = useMutation({
     mutationFn: simOverride,
     onMutate: () => setBusy(true),
@@ -69,6 +79,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         <div>
           {[
             ["dashboard", "Dashboard"],
+            ["campaign", "Campaign"],
             ["markets", "Markets"],
             ["rd", "R&D / Tapeout"],
             ["capacity", "Capacity"],
@@ -92,6 +103,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         <div style={{ marginTop: 16 }}>
           <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>Tick Month</button>
           <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>Simulate Quarter</button>
+          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>Simulate Year</button>
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
@@ -99,6 +111,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
           {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
         </div>
         {nav === "dashboard" && <Dashboard />}
+        {nav === "campaign" && <Campaign />}
         {nav === "markets" && <Markets onOverride={(p)=>overrideMut.mutate(p as any)} />}
         {nav === "rd" && <RD onOverride={(p)=>overrideMut.mutate(p as any)} />}
         {nav === "capacity" && <Capacity onOverride={(p)=>overrideMut.mutate(p as any)} />}
@@ -120,6 +133,7 @@ function Dashboard() {
   return (
     <div>
       <h2>Dashboard</h2>
+      <MissionHUD />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         <Kpi label="Cash" value={cents(kpi.cash_cents)} />
         <Kpi label="Revenue" value={cents(kpi.revenue_cents)} />
@@ -133,10 +147,65 @@ function Dashboard() {
         <Kpi label="Output" value={`${kpi.output_units}`} />
         <Kpi label="Inventory" value={`${kpi.inventory_units}`} />
       </div>
-      <div style={{ marginTop: 16 }}>
-        <h3>Revenue vs Profit</h3>
-        <LineChart data={data} />
+        <div style={{ marginTop: 16 }}>
+          <h3>Revenue vs Profit (last 24 months)</h3>
+          <RechartsLine data={data.slice(-24)} />
+        </div>
+    </div>
+  );
+}
+
+function MissionHUD() {
+  const { stateDto } = useAppStore();
+  const goals = (stateDto as any)?.campaign?.goals ?? [];
+  if (!goals.length) return null;
+  return (
+    <div style={{ padding: 8, border: "1px solid #eee", margin: "8px 0", borderRadius: 6 }}>
+      <strong>Mission HUD:</strong>
+      <ul style={{ margin: 0 }}>
+        {goals.slice(0, 3).map((g: any, i: number) => (
+          <li key={i}>{g.desc} — {(g.progress * 100).toFixed(0)}% (by {g.deadline})</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Campaign() {
+  const { stateDto } = useAppStore();
+  const camp = (stateDto as any)?.campaign as any;
+  return (
+    <div>
+      <h2>Campaign</h2>
+      <div style={{ marginBottom: 8 }}>
+        <button onClick={() => simCampaignReset("1990s")}>Restart 1990s Campaign</button>
+        <span style={{ marginLeft: 12 }}>
+          Difficulty:
+          <select onChange={(e) => simCampaignSetDifficulty(e.target.value)} defaultValue={camp?.difficulty ?? "normal"} style={{ marginLeft: 6 }}>
+            <option value="easy">Easy</option>
+            <option value="normal">Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </span>
       </div>
+      {camp ? (
+        <div>
+          <div>Status: <span style={{ padding: "2px 6px", borderRadius: 4, background: camp.status === "Success" ? "#d1fae5" : camp.status === "Failed" ? "#fee2e2" : "#e5e7eb" }}>{camp.status}</span></div>
+          <div>Start: {camp.start} — End: {camp.end}</div>
+          <h3>Goals</h3>
+          <table style={{ width: "100%", margin: "8px 0" }}>
+            <thead><tr><th align="left">Goal</th><th>Progress</th><th>Deadline</th><th>Status</th></tr></thead>
+            <tbody>
+              {camp.goals.map((g: any, i: number) => (
+                <tr key={i}><td>{g.desc}</td><td align="right">{(g.progress * 100).toFixed(0)}%</td><td>{g.deadline}</td><td align="center">{g.done ? "Done" : "InProgress"}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          <ActiveModsTable />
+        </div>
+      ) : (
+        <div>No campaign loaded.</div>
+      )}
     </div>
   );
 }
@@ -252,15 +321,46 @@ function Kpi({ label, value }: { label: string; value: string }) {
 function SegmentsTable() {
   const { stateDto } = useAppStore();
   if (!stateDto) return null;
+  const forecast = (s: any) => {
+    const g = (s.trend_pct ?? 0) / 100;
+    const pts: number[] = [];
+    let base = s.base_demand_t ?? s.base_demand_units;
+    for (let i = 0; i < 12; i++) {
+      pts.push(Math.floor(base));
+      base = base * (1 + g / 12);
+    }
+    return pts;
+  };
   return (
     <table style={{ width: "100%", margin: "8px 0" }}>
       <thead>
-        <tr><th align="left">Segment</th><th>Base Demand</th><th>Elasticity</th></tr>
+        <tr>
+          <th align="left">Segment</th>
+          <th>Base Demand (1990)</th>
+          <th>Base Demand (t)</th>
+          <th>Ref Price (t)</th>
+          <th>Elasticity</th>
+          <th>Trend</th>
+          <th>Sold (t)</th>
+          <th>Forecast 12m</th>
+        </tr>
       </thead>
       <tbody>
-        {stateDto.segments.map((s) => (
-          <tr key={s.name}><td>{s.name}</td><td align="right">{s.base_demand_units}</td><td align="right">{s.price_elasticity}</td></tr>
-        ))}
+        {stateDto.segments.map((s) => {
+          const pts = forecast(s);
+          return (
+            <tr key={s.name}>
+              <td>{s.name}</td>
+              <td align="right">{s.base_demand_units}</td>
+              <td align="right">{s.base_demand_t}</td>
+              <td align="right">{cents(s.ref_price_t_cents)}</td>
+              <td align="right">{s.elasticity.toFixed(2)}</td>
+              <td align="right">{(s.trend_pct ?? 0).toFixed(1)}%</td>
+              <td align="right">{s.sold_units}</td>
+              <td><small>{pts.join(", ")}</small></td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -306,5 +406,41 @@ function LineChart({ data }: { data: { m: number; revenue: number; profit: numbe
     <pre style={{ background: "#fafafa", padding: 8 }}>
       {data.map((d) => `m${d.m}: R=${d.revenue.toFixed(0)} P=${d.profit.toFixed(0)}`).join("\n")}
     </pre>
+  );
+}
+
+function RechartsLine({ data }: { data: { m: number; revenue: number; profit: number }[] }) {
+  return (
+    <div style={{ width: "100%", height: 240 }}>
+      <ResponsiveContainer>
+        <RLineChart data={data}>
+          <XAxis dataKey="m" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Line type="monotone" dataKey="revenue" stroke="#8884d8" dot={false} />
+          <Line type="monotone" dataKey="profit" stroke="#82ca9d" dot={false} />
+        </RLineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ActiveModsTable() {
+  const [mods, setMods] = React.useState<{ id: string; kind: string; target: string; start: string; end: string }[]>([]);
+  useEffect(() => { (async () => { try { const info = await simBalanceInfo(); setMods(info.active_mods); } catch {} })(); }, []);
+  if (!mods.length) return null;
+  return (
+    <div>
+      <h3>Active Mods</h3>
+      <table style={{ width: "100%", margin: "8px 0" }}>
+        <thead><tr><th align="left">ID</th><th>Type</th><th>Target</th><th>Start</th><th>End</th></tr></thead>
+        <tbody>
+          {mods.map((m, i) => (
+            <tr key={i}><td>{m.id}</td><td align="center">{m.kind}</td><td>{m.target}</td><td>{m.start}</td><td>{m.end}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

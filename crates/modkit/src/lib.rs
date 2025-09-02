@@ -79,7 +79,8 @@ struct Patch {
 
 /// Active effect with patches to revert later.
 #[derive(Debug, Clone)]
-struct ActiveEffect {
+pub struct ActiveEffect {
+    pub id: String,
     start: NaiveDate,
     end: NaiveDate,
     patches: Vec<Patch>,
@@ -154,19 +155,38 @@ impl ModEngine {
         for m in &self.mods {
             if let Some(spec) = self.eval_time_trigger_with_meta(m)? {
                 let end = add_months(spec.start, spec.months);
-                if spec.start == date && !self.is_effect_active(spec.start, end) {
+                if spec.start == date && !self.is_effect_active(&m.meta.id, spec.start, end) {
                     to_apply.push(spec);
                 }
             }
         }
         for spec in to_apply {
-            self.apply_effect(world, &spec);
+            // Determine the mod id for this spec by re-evaluating metadata source
+            // We find the first loaded mod that matches the trigger for this start date.
+            // Fallback to a generic id if not found (tests).
+            let mut id_opt: Option<String> = None;
+            for m in &self.mods {
+                if let Ok(Some(s2)) = self.eval_time_trigger_with_meta(m) {
+                    if s2.start == spec.start
+                        && s2.months == spec.months
+                        && (s2.cost_increase_pct - spec.cost_increase_pct).abs() < f32::EPSILON
+                        && (s2.yield_delta - spec.yield_delta).abs() < f32::EPSILON
+                    {
+                        id_opt = Some(m.meta.id.clone());
+                        break;
+                    }
+                }
+            }
+            let id_str = id_opt.as_deref();
+            self.apply_effect_with_id(world, &spec, id_str);
         }
         Ok(())
     }
 
-    fn is_effect_active(&self, start: NaiveDate, end: NaiveDate) -> bool {
-        self.active.iter().any(|e| e.start == start && e.end == end)
+    fn is_effect_active(&self, id: &str, start: NaiveDate, end: NaiveDate) -> bool {
+        self.active
+            .iter()
+            .any(|e| e.id == id && e.start == start && e.end == end)
     }
 
     pub(crate) fn eval_time_trigger(
@@ -255,7 +275,12 @@ impl ModEngine {
         }
     }
 
-    pub(crate) fn apply_effect(&mut self, world: &mut core::World, spec: &EffectSpec) {
+    fn apply_effect_with_id(
+        &mut self,
+        world: &mut core::World,
+        spec: &EffectSpec,
+        id_override: Option<&str>,
+    ) {
         let mul =
             cost_multiplier(Decimal::from_f32(spec.cost_increase_pct).unwrap_or(Decimal::ZERO));
         let mut patches = Vec::with_capacity(world.tech_tree.len());
@@ -275,7 +300,9 @@ impl ModEngine {
             });
         }
         let end = add_months(spec.start, spec.months);
+        let id = id_override.unwrap_or("tech_effect").to_string();
         self.active.push(ActiveEffect {
+            id,
             start: spec.start,
             end,
             patches,
@@ -299,6 +326,14 @@ impl ModEngine {
         }
         self.active = still_active;
     }
+
+    /// Return a summary of active tech effects (id/start/end) for telemetry/UI.
+    pub fn active_effects_summary(&self) -> Vec<(String, NaiveDate, NaiveDate)> {
+        self.active
+            .iter()
+            .map(|e| (e.id.clone(), e.start, e.end))
+            .collect()
+    }
 }
 
 fn add_months(start: NaiveDate, months: u32) -> NaiveDate {
@@ -313,6 +348,69 @@ fn add_months(start: NaiveDate, months: u32) -> NaiveDate {
 /// Returns a fresh Rhai engine with default configuration.
 pub fn new_engine() -> Engine {
     Engine::new()
+}
+
+/// Market effect specification parsed from YAML metadata or Rhai script.
+#[derive(Debug, Clone)]
+pub struct MarketEffectSpec {
+    pub id: String,
+    pub start: NaiveDate,
+    pub months: u32,
+    pub segment_id: String,
+    pub base_demand_pct: Option<f32>,
+    pub elasticity_delta: Option<f32>,
+}
+
+impl ModEngine {
+    /// Try to parse a market effect from a mod's metadata (metadata.yaml under key market_effect).
+    pub fn eval_market_effect_with_meta(
+        &self,
+        m: &LoadedMod,
+    ) -> Result<Option<MarketEffectSpec>, ModError> {
+        let meta_path = m.dir.join("metadata.yaml");
+        let text = fs::read_to_string(meta_path)?;
+        let mf: serde_yaml::Value =
+            serde_yaml::from_str(&text).map_err(|e| ModError::InvalidMeta(e.to_string()))?;
+        // Expect structure: { market_effect: { segment, base_demand_pct?, elasticity_delta? }, start, months }
+        let me = mf.get("market_effect");
+        if me.is_none() {
+            return Ok(None);
+        }
+        let start_s = mf
+            .get("start")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ModError::InvalidMeta("missing start for market_effect".into()))?;
+        let months = mf.get("months").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let start = NaiveDate::parse_from_str(start_s, "%Y-%m-%d")
+            .map_err(|e| ModError::InvalidMeta(e.to_string()))?;
+        let segment_id = me
+            .as_ref()
+            .unwrap()
+            .get("segment")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let base_demand_pct = me
+            .as_ref()
+            .unwrap()
+            .get("base_demand_pct")
+            .and_then(|v| v.as_f64())
+            .map(|x| x as f32);
+        let elasticity_delta = me
+            .as_ref()
+            .unwrap()
+            .get("elasticity_delta")
+            .and_then(|v| v.as_f64())
+            .map(|x| x as f32);
+        Ok(Some(MarketEffectSpec {
+            id: m.meta.id.clone(),
+            start,
+            months,
+            segment_id,
+            base_demand_pct,
+            elasticity_delta,
+        }))
+    }
 }
 
 /// Convert cost percentage/fraction to multiplier.
@@ -372,7 +470,7 @@ mod tests {
             cost_increase_pct: 15.0,
             yield_delta: -0.02,
         };
-        eng.apply_effect(&mut world, &spec_a);
+        eng.apply_effect_with_id(&mut world, &spec_a, Some("test"));
         let node = &world.tech_tree[0];
         assert_eq!(node.wafer_cost_usd, Decimal::new(1150, 0));
         assert_eq!(node.yield_baseline, Decimal::new(88, 2));
@@ -396,7 +494,7 @@ mod tests {
             cost_increase_pct: 0.15,
             yield_delta: -0.02,
         };
-        eng2.apply_effect(&mut world2, &spec_b);
+        eng2.apply_effect_with_id(&mut world2, &spec_b, Some("test2"));
         let node = &world2.tech_tree[0];
         assert_eq!(node.wafer_cost_usd, Decimal::new(1150, 0));
         assert_eq!(node.yield_baseline, Decimal::new(88, 2));

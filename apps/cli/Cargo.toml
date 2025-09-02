@@ -14,3 +14,5 @@ rust_decimal = { workspace = true }
 sim-core = { path = "../../crates/sim-core" }
 sim-runtime = { path = "../../crates/sim-runtime" }
 persistence = { path = "../../crates/persistence" }
+serde = { workspace = true }
+serde_yaml = "0.9"

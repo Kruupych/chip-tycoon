@@ -1,0 +1,12 @@
+id: evt_1991_foundry_bump
+name: Foundry price bump (1991)
+version: "0.1.0"
+engine_schema_version: 1
+compat: ">=0.1.0"
+hooks:
+  - time_trigger
+time_effect:
+  start: "1991-07-01"
+  months: 6
+  cost_pct: 10.0
+  yield_delta: 0.0

@@ -18,9 +18,15 @@ lint:
 bench:
     cargo criterion
 
+ai-bench:
+    cargo criterion --bench ai_bench
+
 # Запуск headless-симуляции (пример)
 sim:
-    cargo run -p cli -- --scenario assets/data/baseline_1990.yaml --years 10
+    cargo run -p cli -- --campaign 1990s
+
+export-campaign path="telemetry/campaign_1990s.json":
+    cargo run -p cli -- --campaign 1990s --export-campaign {{path}}
 
 # Запуск Bevy-фронта (игры)
 run-game:

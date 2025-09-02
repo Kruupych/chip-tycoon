@@ -1,0 +1,31 @@
+# 1990s technology eras — simplified representative nodes
+
+nodes:
+  - id: N600
+    year_available: 1990
+    wafer_cost_cents: 100000
+    yield_baseline: 0.90
+    mask_set_cost_cents: 2_500_000
+    deps: []
+
+  - id: N350
+    year_available: 1993
+    wafer_cost_cents: 120000
+    yield_baseline: 0.88
+    mask_set_cost_cents: 3_000_000
+    deps: [N600]
+
+  - id: N250
+    year_available: 1997
+    wafer_cost_cents: 150000
+    yield_baseline: 0.85
+    mask_set_cost_cents: 3_500_000
+    deps: [N350]
+
+  - id: N180
+    year_available: 1999
+    wafer_cost_cents: 180000
+    yield_baseline: 0.82
+    mask_set_cost_cents: 4_000_000
+    deps: [N250]
+

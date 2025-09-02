@@ -89,3 +89,24 @@ IPC (Tauri)
 
 - sim_state: { date, month_index, companies[], segments[], pricing{asp_cents, unit_cost_cents}, kpi{cash_cents, revenue_cents, cogs_cents, contract_costs_cents, profit_cents, share, rd_pct, output_units, inventory_units}, contracts[], pipeline{queue[], released[]}, ai_plan, config{finance, product_cost} }
 - sim_lists: { tech_nodes[], foundries[], segments[] }
+
+## 1990s Markets & Campaign
+
+- Data files under `assets/data/`:
+  - `markets_1990s.yaml`: Desktop/Server/Console/Embedded with 1990 baselines, elasticities, annual growth, and step events.
+  - `tech_era_1990s.yaml`: N600/N350/N250/N180 with cost/yield and availability years.
+- Trend system in runtime applies annual demand growth and step events each month. `sim_state.segments[]` exposes `base_demand_t`, `ref_price_t_cents`, `elasticity`, `trend_pct`, and `sold_units`.
+- Campaign scenario `assets/scenarios/campaign_1990s.yaml` defines goals and fail conditions. UI has a Campaign page and a Mission HUD on the Dashboard.
+
+How to Play the Campaign
+
+- Start/reset via IPC `sim_campaign_reset("1990s")` or from the UI Campaign page.
+- Goals include desktop share by 1995, launching N350 by 1994, profit target by 1998, and surviving the 1998 shortage. Foundry shocks are applied via mod events under `assets/mods/*`.
+
+Performance budget
+
+- Criterion bench `just ai-bench` runs a 10-company, 40-year simulation. Target budget: ≤ 5–10 ms/tick on a typical dev laptop (informational).
+
+Balance regression tests
+
+- Trend scaling unit tests for 1995/2000, stronger-segment sales integration test, and YAML snapshot checks guard accidental balance drift.

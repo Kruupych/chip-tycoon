@@ -26,7 +26,7 @@ const invokeMock = vi.fn(async (cmd: string) => {
       date: "1990-02-01",
       month_index: 1,
       companies: [{ name: "A", cash_cents: 1000000, debt_cents: 0 }],
-      segments: [{ name: "Seg", base_demand_units: 1000, price_elasticity: -1.2 }],
+      segments: [{ name: "Seg", base_demand_units: 1000, price_elasticity: -1.2, base_demand_t: 1000, ref_price_t_cents: 30000, elasticity: -1.2, trend_pct: 8.0, sold_units: 800 }],
       pricing: { asp_cents: 30000, unit_cost_cents: 20000 },
       kpi: { cash_cents: 1000000, revenue_cents: 12345, cogs_cents: 6789, contract_costs_cents: 0, profit_cents: 5556, share: 0.2, rd_pct: 0.1, output_units: 1000, inventory_units: 950 },
       contracts: [],

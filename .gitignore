@@ -5,3 +5,7 @@ target/
 saves/
 telemetry/
 crates/persistence/target/
+assets/generated/
+criterion/
+apps/mgmt-ui/web/node_modules/
+apps/mgmt-ui/web/dist/

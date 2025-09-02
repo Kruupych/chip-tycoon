@@ -16,6 +16,9 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 persistence = { path = "../persistence" }
 serde_json = { workspace = true }
+serde = { workspace = true }
+serde_yaml = "0.9"
+modkit = { path = "../modkit" }
 
 [dev-dependencies]
 criterion = { workspace = true }
