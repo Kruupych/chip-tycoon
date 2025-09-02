@@ -2732,6 +2732,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "ico",
  "jsonschema",
  "once_cell",
  "persistence",

@@ -1,12 +1,29 @@
 fn main() {
-    // Ensure a default icon exists so tauri-build doesn't fail locally
-    let icon_path = std::path::Path::new("icons/icon.png");
-    if !icon_path.exists() {
+    // Ensure default icons exist so tauri-build doesn't fail (Windows requires .ico)
+    let _ = std::fs::create_dir_all("icons");
+    let png_path = std::path::Path::new("icons/icon.png");
+    if !png_path.exists() {
+        // 1x1 white PNG
         let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P8z/C/HwAFgwJ/l9Wl5QAAAABJRU5ErkJggg==";
         if let Ok(bytes) = base64::decode(png_b64) {
-            let _ = std::fs::create_dir_all("icons");
-            let _ = std::fs::write(icon_path, bytes);
+            let _ = std::fs::write(png_path, bytes);
         }
+    }
+    let ico_path = std::path::Path::new("icons/icon.ico");
+    if !ico_path.exists() {
+        // Generate a simple 32x32 blue square ICO
+        let mut data = vec![0u8; 32 * 32 * 4];
+        for px in data.chunks_mut(4) {
+            px[0] = 0x33; // B
+            px[1] = 0x66; // G
+            px[2] = 0xCC; // R
+            px[3] = 0xFF; // A
+        }
+        let image = ico::IconImage::from_rgba_data(32, 32, data);
+        let mut dir = ico::IconDir::new(ico::ResourceType::Icon);
+        dir.add_entry(ico::IconDirEntry::encode(&image).expect("encode ico"));
+        let mut file = std::fs::File::create(ico_path).expect("create ico");
+        dir.write(&mut file).expect("write ico");
     }
     // Preserve tauri build
     tauri_build::build();

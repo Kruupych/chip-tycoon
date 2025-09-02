@@ -23,5 +23,6 @@ rust_decimal = { version = "1", features = ["serde"] }
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 base64 = "0.22"
+ico = "0.4"
 
 [workspace]
