@@ -575,6 +575,48 @@ pub fn run_months(world: World, months: u32) -> SimSnapshot {
     snap
 }
 
+/// Run months in-place on an existing ECS world.
+pub fn run_months_in_place(world: &mut World, months: u32) -> (SimSnapshot, Vec<MonthlyTelemetry>) {
+    let mut schedule = bevy_ecs::schedule::Schedule::default();
+    use bevy_ecs::schedule::IntoSystemConfigs;
+    schedule.add_systems(
+        (
+            r_and_d_system,
+            foundry_capacity_system,
+            production_system,
+            tapeout_system,
+            (sales_system).after(production_system),
+            (finance_system_billing, finance_system),
+            ai_strategy_system,
+            ai_quarterly_planner_system,
+        )
+            .chain(),
+    );
+    let mut telemetry = Vec::with_capacity(months as usize);
+    for m in 0..months {
+        schedule.run(world);
+        let pricing = world.resource::<Pricing>().clone();
+        let mut stats = world.resource_mut::<Stats>();
+        stats.months_run = stats.months_run.saturating_add(1);
+        let sold_units = stats.last_sold_units;
+        let asp = pricing.asp_usd;
+        let unit_cost = pricing.unit_cost_usd;
+        let revenue = asp * Decimal::from(sold_units);
+        let margin = revenue - unit_cost * Decimal::from(sold_units);
+        telemetry.push(MonthlyTelemetry {
+            month_index: m + 1,
+            output_units: stats.output_units,
+            sold_units,
+            asp_usd: asp,
+            unit_cost_usd: unit_cost,
+            margin_usd: margin,
+            revenue_usd: revenue,
+        });
+    }
+    let stats = world.resource::<Stats>().clone();
+    (stats.into(), telemetry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
