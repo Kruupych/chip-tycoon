@@ -40,6 +40,7 @@ pub struct Stats {
     pub output_units: u64,
     pub defect_units: u64,
     pub inventory_units: u64,
+    pub last_contract_costs_cents: i64,
 }
 
 /// Snapshot of aggregated KPIs after running the simulation.
@@ -118,6 +119,22 @@ pub struct Capacity {
 /// Player-controlled monthly R&D budget in cents.
 #[derive(Resource, Default, Clone, Copy)]
 pub struct RnDBudgetCents(pub i64);
+
+/// Finance configuration: cash flow lags (days). 0 = immediate.
+#[derive(Resource, Clone, Copy, Default)]
+pub struct FinanceConfig {
+    pub revenue_cash_in_days: u16,
+    pub cogs_cash_out_days: u16,
+    pub rd_cash_out_days: u16,
+}
+
+// Default derived
+
+/// Finance one-off events within the month (e.g., expedite spend).
+#[derive(Resource, Default, Clone, Copy)]
+pub struct FinanceEvents {
+    pub expedite_spend_cents: i64,
+}
 
 /// Global RNG resource seeded from `SimConfig` for deterministic noise.
 #[derive(Resource)]
@@ -207,9 +224,9 @@ pub fn finance_system(stats: ResMut<Stats>) {
 /// Finance: charge foundry contracts monthly according to billing model.
 pub fn finance_system_billing(
     mut stats: ResMut<Stats>,
-    mut dom: ResMut<DomainWorld>,
     cap: Res<Capacity>,
     book: Res<CapacityBook>,
+    dom: Res<DomainWorld>,
 ) {
     let date = dom.0.macro_state.date;
     let mut remaining_used_wafers = cap.wafers_per_month as i64;
@@ -231,15 +248,8 @@ pub fn finance_system_billing(
         let cost = billed_wafers.saturating_mul(price);
         total_cost_cents = total_cost_cents.saturating_add(cost);
     }
+    stats.last_contract_costs_cents = total_cost_cents;
     stats.contract_costs_cents = stats.contract_costs_cents.saturating_add(total_cost_cents);
-    // Deduct from cash of the first company for now
-    if total_cost_cents > 0 {
-        if let Some(c) = dom.0.companies.first_mut() {
-            let dec = Decimal::from_i64(total_cost_cents).unwrap_or(Decimal::ZERO)
-                / Decimal::from(100u64);
-            c.cash_usd -= dec;
-        }
-    }
 }
 
 /// Advance tapeout queue and update product appeal when products are released.
@@ -370,11 +380,12 @@ pub fn ai_strategy_system(
 /// Quarterly planner integration: applies top decision to contracts/tapeouts.
 pub fn ai_quarterly_planner_system(
     stats: Res<Stats>,
-    mut dom: ResMut<DomainWorld>,
+    dom: Res<DomainWorld>,
     mut pricing: ResMut<Pricing>,
     cfg: Res<AiConfig>,
     mut book: ResMut<CapacityBook>,
     mut pipeline: ResMut<Pipeline>,
+    mut fevents: ResMut<FinanceEvents>,
 ) {
     if (stats.months_run + 1) % 3 != 0 {
         return;
@@ -496,9 +507,9 @@ pub fn ai_quarterly_planner_system(
                         ready = chrono::NaiveDate::from_ymd_opt(y, m, start.day()).unwrap_or(ready);
                     }
                     expedite_cost = 100_000; // $1,000.00
-                    if let Some(c) = dom.0.companies.first_mut() {
-                        c.cash_usd -= Decimal::new(expedite_cost, 2);
-                    }
+                    fevents.expedite_spend_cents = fevents
+                        .expedite_spend_cents
+                        .saturating_add(expedite_cost);
                 }
                 let req = core::TapeoutRequest {
                     product: spec.clone(),
@@ -527,6 +538,8 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(ActiveProduct::default());
     w.insert_resource(Pipeline::default());
     w.insert_resource(RnDBudgetCents(0));
+    w.insert_resource(FinanceConfig::default());
+    w.insert_resource(FinanceEvents::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
     w.insert_resource(AiConfig(ai_cfg));
@@ -550,7 +563,7 @@ pub fn run_months_with_telemetry(
             tapeout_system,
             // capture month-level sales metrics
             (sales_system).after(production_system),
-            (finance_system_billing, finance_system),
+            (finance_system_billing, finance_system, finance_system_cash),
             ai_strategy_system,
             ai_quarterly_planner_system,
             advance_macro_date_system,
@@ -599,7 +612,7 @@ pub fn run_months_in_place(world: &mut World, months: u32) -> (SimSnapshot, Vec<
             production_system,
             tapeout_system,
             (sales_system).after(production_system),
-            (finance_system_billing, finance_system),
+            (finance_system_billing, finance_system, finance_system_cash),
             ai_strategy_system,
             ai_quarterly_planner_system,
             advance_macro_date_system,
@@ -664,6 +677,39 @@ fn build_snapshot(world: &World) -> SimSnapshot {
         defect_units: stats.defect_units,
         inventory_units: stats.inventory_units,
     }
+}
+
+/// Apply monthly cash flow given immediate cash lags.
+pub fn finance_system_cash(
+    stats: Res<Stats>,
+    pricing: Res<Pricing>,
+    mut dom: ResMut<DomainWorld>,
+    rd: Res<RnDBudgetCents>,
+    cfg: Res<FinanceConfig>,
+    mut fevents: ResMut<FinanceEvents>,
+) {
+    let revenue_cents = persistence::decimal_to_cents_i64(
+        pricing.asp_usd * Decimal::from(stats.last_sold_units),
+    )
+    .unwrap_or(0);
+    let cogs_cents = persistence::decimal_to_cents_i64(
+        pricing.unit_cost_usd * Decimal::from(stats.last_sold_units),
+    )
+    .unwrap_or(0);
+    let contract_cents = stats.last_contract_costs_cents;
+    let rd_cents = rd.0.max(0);
+    let expedite_cents = fevents.expedite_spend_cents.max(0);
+    if cfg.revenue_cash_in_days == 0 && cfg.cogs_cash_out_days == 0 && cfg.rd_cash_out_days == 0 {
+        if let Some(c) = dom.0.companies.first_mut() {
+            let delta = revenue_cents
+                .saturating_sub(cogs_cents)
+                .saturating_sub(contract_cents)
+                .saturating_sub(rd_cents)
+                .saturating_sub(expedite_cents);
+            c.cash_usd += Decimal::from_i64(delta).unwrap_or(Decimal::ZERO) / Decimal::from(100u64);
+        }
+    }
+    fevents.expedite_spend_cents = 0;
 }
 
 /// Rehydrate released products from persistence rows into runtime resources.
@@ -832,12 +878,11 @@ pub fn apply_tapeout_request(
             ready =
                 cand.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(y2, m2 as u32, 1).unwrap());
         }
-        expedite_cost = 100_000; // $1,000.00
-                                 // charge cash
-        let mut dom = world.resource_mut::<DomainWorld>();
-        if let Some(c) = dom.0.companies.first_mut() {
-            c.cash_usd -= Decimal::new(expedite_cost, 2);
-        }
+        expedite_cost = 100_000; // $1,000.00 booked via finance events
+        let mut fe = world.resource_mut::<FinanceEvents>();
+        fe.expedite_spend_cents = fe
+            .expedite_spend_cents
+            .saturating_add(expedite_cost);
     }
     // enqueue
     let mut pipe = world.resource_mut::<Pipeline>();
@@ -1191,6 +1236,63 @@ mod tests {
         assert_eq!(snap1.revenue_cents, snap2.revenue_cents);
         assert_eq!(snap1.profit_cents, snap2.profit_cents);
         assert!((snap1.market_share - snap2.market_share).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cash_flow_reconciles_with_profit_zero_lag() {
+        // 12 months, simple config, set RD budget and one expedite
+        let dom = core::World {
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: Decimal::new(1, 0),
+                freq_ghz_baseline: Decimal::new(1, 0),
+                leakage_index: Decimal::new(1, 0),
+                yield_baseline: Decimal::new(9, 1),
+                wafer_cost_usd: Decimal::new(1000, 0),
+                mask_set_cost_usd: Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 55 };
+        let mut w = init_world(dom.clone(), cfg);
+        // RD budget 10,000 cents/month
+        {
+            let mut rd = w.resource_mut::<RnDBudgetCents>();
+            rd.0 = 10_000;
+        }
+        // Trigger an expedited tapeout right away
+        {
+            let _ready = apply_tapeout_request(&mut w, 0.7, 100.0, "N90".into(), true);
+        }
+        // Track starting cash
+        let cash0 = w.resource::<DomainWorld>().0.companies[0].cash_usd;
+        // Run 12 months
+        let (snap, _t) = run_months_in_place(&mut w, 12);
+        let cash1 = w.resource::<DomainWorld>().0.companies[0].cash_usd;
+        let delta_cents = persistence::decimal_to_cents_i64(cash1 - cash0).unwrap_or(0);
+        // Expected approx = profit - contracts - rd - expedite
+        let profit_c = snap.profit_cents;
+        let contracts_c = snap.contract_costs_cents;
+        let rd_c = 12 * 10_000; // cents
+        let expedite_c = 100_000; // only once
+        let expected = profit_c - contracts_c - rd_c - expedite_c;
+        // Allow minor rounding drift (<= a few cents per month)
+        let diff = (delta_cents - expected).abs();
+        assert!(diff <= 100, "diff too large: {}", diff);
     }
 
     #[test]
@@ -1578,9 +1680,10 @@ mod tests {
             let mut cap = w.resource_mut::<Capacity>();
             cap.wafers_per_month = 0;
         }
-        // Run finance billing only
+        // Run finance billing and cash application
         let mut sched = bevy_ecs::schedule::Schedule::default();
-        sched.add_systems(finance_system_billing);
+        use bevy_ecs::schedule::IntoSystemConfigs;
+        sched.add_systems((finance_system_billing, finance_system_cash).chain());
         sched.run(&mut w);
         let stats = w.resource::<Stats>();
         // Expect billed: 3000 * 1000 cents
