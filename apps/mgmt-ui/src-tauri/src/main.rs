@@ -2,6 +2,7 @@
 #![deny(warnings)]
 
 use once_cell::sync::Lazy;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sim_core as core;
 use sim_runtime as runtime;
@@ -13,6 +14,7 @@ struct SimState {
     busy: bool,
     scenario: Option<CampaignScenario>,
     tutorial: Option<TutorialCfg>,
+    autosave: bool,
 }
 
 static SIM_STATE: Lazy<Arc<RwLock<Option<SimState>>>> =
@@ -82,6 +84,17 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
             let (_s1, _t1) = runtime::run_months_in_place(&mut st.world, 1);
             let (_s2, _t2) = runtime::run_months_in_place(&mut st.world, 1);
             let (s3, _t3) = runtime::run_months_in_place(&mut st.world, 1);
+            // Autosave once per quarter if enabled
+            if st.autosave {
+                let date = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
+                let name = format!("auto-{}{:02}", date.year(), date.month());
+                // Trigger background save
+                let dom_clone = st.dom.clone();
+                let world_clone = st.world.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = save_now(name, dom_clone, world_clone).await;
+                });
+            }
             s3
         };
         // Clear busy
@@ -651,10 +664,10 @@ fn main() {
     ecs.insert_resource(markets);
     // Default campaign events for 1990s
     ecs.insert_resource(runtime::load_market_events_yaml("assets/events/campaign_1990s.yaml"));
-    *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None, tutorial: None });
+    *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None, tutorial: None, autosave: true });
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -739,6 +752,126 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
                 .collect(),
         })
         .collect()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct SaveInfo { id: i64, name: String, created_at: String, progress: u32 }
+
+async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
+    use persistence as p;
+    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
+    let sid = p::create_save(&pool, &name, None).await.map_err(|e| e.to_string())?;
+    // Snapshot domain world
+    let month_index = world.resource::<runtime::Stats>().months_run as i64;
+    let bytes = p::serialize_world_bincode(&dom).map_err(|e| e.to_string())?;
+    let _snap_id = p::insert_snapshot(&pool, sid, month_index, "bincode", &bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Persist contracts
+    let book = world.resource::<runtime::CapacityBook>();
+    for c in &book.contracts {
+        let row = p::ContractRow { foundry_id: c.foundry_id.clone(), wafers_per_month: c.wafers_per_month as i64, price_per_wafer_cents: c.price_per_wafer_cents, take_or_pay_frac: c.take_or_pay_frac, billing_cents_per_wafer: c.billing_cents_per_wafer, billing_model: c.billing_model.into(), lead_time_months: c.lead_time_months as i64, start: c.start.to_string(), end: c.end.to_string() };
+        let _ = p::insert_contract(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+    }
+    // Persist tapeout queue and released
+    let pipe = world.resource::<runtime::Pipeline>();
+    for t in &pipe.0.queue {
+        let row = p::TapeoutRow { product_json: serde_json::to_string(&t.product).map_err(|e| e.to_string())?, tech_node: t.tech_node.0.clone(), start: t.start.to_string(), ready: t.ready.to_string(), expedite: if t.expedite {1} else {0}, expedite_cost_cents: t.expedite_cost_cents };
+        let _ = p::insert_tapeout_request(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+    }
+    for r in &pipe.0.released {
+        let row = p::ReleasedRow { product_json: serde_json::to_string(r).map_err(|e| e.to_string())?, released_at: dom.macro_state.date.to_string() };
+        let _ = p::insert_released_product(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+    }
+    Ok(sid)
+}
+
+#[tauri::command]
+async fn sim_save(name: Option<String>) -> Result<i64, String> {
+    let (dom, world) = {
+        let g = SIM_STATE.read().unwrap();
+        let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+        let date = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
+        let nm = name.unwrap_or_else(|| format!("manual-{}{:02}{:02}", date.year(), date.month(), date.day()));
+        (st.dom.clone(), st.world.clone())
+    };
+    save_now(name.unwrap_or_else(|| "manual".into()), dom, world).await
+}
+
+#[tauri::command]
+async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
+    use persistence as p;
+    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
+    // List saves by naive query since persistence doesn't expose it
+    let rows = sqlx::query("SELECT id, name, created_at FROM saves ORDER BY created_at DESC")
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out: Vec<SaveInfo> = Vec::new();
+    for r in rows {
+        let id: i64 = r.try_get("id").unwrap_or(0);
+        let name: String = r.try_get("name").unwrap_or_default();
+        let created_at: String = r.try_get("created_at").unwrap_or_default();
+        let progress = p::latest_snapshot(&pool, id)
+            .await
+            .ok()
+            .flatten()
+            .map(|(_sid, m, _d, _f)| m as u32)
+            .unwrap_or(0);
+        out.push(SaveInfo { id, name, created_at, progress });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
+    use persistence as p;
+    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
+    let (_snap_id, _m, data, _fmt) = p::latest_snapshot(&pool, save_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no snapshot".to_string())?;
+    let dom = p::deserialize_world_bincode(&data).map_err(|e| e.to_string())?;
+    let mut world = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
+    // Rehydrate contracts
+    let contracts = p::list_contracts(&pool, save_id).await.map_err(|e| e.to_string())?;
+    if !contracts.is_empty() {
+        let mut book = world.resource_mut::<runtime::CapacityBook>();
+        for c in contracts {
+            let start = chrono::NaiveDate::parse_from_str(&c.start, "%Y-%m-%d").map_err(|e| e.to_string())?;
+            let end = chrono::NaiveDate::parse_from_str(&c.end, "%Y-%m-%d").map_err(|e| e.to_string())?;
+            book.contracts.push(runtime::FoundryContract { foundry_id: c.foundry_id, wafers_per_month: c.wafers_per_month as u32, price_per_wafer_cents: c.price_per_wafer_cents, take_or_pay_frac: c.take_or_pay_frac, billing_cents_per_wafer: c.billing_cents_per_wafer, billing_model: Box::leak(c.billing_model.into_boxed_str()), lead_time_months: c.lead_time_months as u8, start, end });
+        }
+    }
+    // Rehydrate released and queue
+    let released = p::list_released_products(&pool, save_id).await.map_err(|e| e.to_string())?;
+    runtime::rehydrate_released_products(&mut world, &released);
+    let queue = p::list_tapeout_requests(&pool, save_id).await.map_err(|e| e.to_string())?;
+    if !queue.is_empty() {
+        let mut pipe = world.resource_mut::<runtime::Pipeline>();
+        for t in queue {
+            let product: core::ProductSpec = serde_json::from_str(&t.product_json).map_err(|e| e.to_string())?;
+            let start = chrono::NaiveDate::parse_from_str(&t.start, "%Y-%m-%d").map_err(|e| e.to_string())?;
+            let ready = chrono::NaiveDate::parse_from_str(&t.ready, "%Y-%m-%d").map_err(|e| e.to_string())?;
+            pipe.0.queue.push(core::TapeoutRequest { product, tech_node: core::TechNodeId(t.tech_node), start, ready, expedite: t.expedite != 0, expedite_cost_cents: t.expedite_cost_cents });
+        }
+    }
+    // Replace state
+    {
+        let mut guard = SIM_STATE.write().unwrap();
+        *guard = Some(SimState { world, dom, busy: false, scenario: None, tutorial: None, autosave: true });
+    }
+    let g = SIM_STATE.read().unwrap();
+    let st = g.as_ref().unwrap();
+    Ok(build_sim_state_dto(st))
+}
+
+#[tauri::command]
+fn sim_set_autosave(on: bool) -> Result<(), String> {
+    let mut g = SIM_STATE.write().unwrap();
+    let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    st.autosave = on;
+    Ok(())
 }
 
 #[tauri::command]
