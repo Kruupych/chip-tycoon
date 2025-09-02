@@ -5,6 +5,8 @@ use chrono::Datelike;
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
+use bevy_ecs::world::World as EcsWorld;
 use sim_core as core;
 use sim_runtime as runtime;
 use std::sync::{Arc, Mutex, RwLock};
@@ -46,7 +48,7 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
 }
 
 struct SimState {
-    world: runtime::World,
+    world: EcsWorld,
     dom: core::World,
     busy: bool,
     scenario: Option<CampaignScenario>,
@@ -57,7 +59,7 @@ struct SimState {
 static SIM_STATE: Lazy<Arc<RwLock<Option<SimState>>>> = Lazy::new(|| Arc::new(RwLock::new(None)));
 static TICK_QUEUE: Lazy<Arc<Mutex<()>>> = Lazy::new(|| Arc::new(Mutex::new(())));
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct PlanSummary {
     decisions: Vec<String>,
     expected_score: f32,
@@ -135,7 +137,7 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
                 let name = format!("auto-{}{:02}", date.year(), date.month());
                 // Trigger background save
                 let dom_clone = st.dom.clone();
-                let world_clone = st.world.clone();
+                let world_clone = runtime::clone_world_state(&st.world);
                 tauri::async_runtime::spawn(async move {
                     let _ = save_now(name, dom_clone, world_clone).await;
                 });
@@ -845,6 +847,8 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     // Build new dom
     let start =
         chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    let end =
+        chrono::NaiveDate::parse_from_str(&sc.end_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     // Validate and load tech + markets assets
     let tech_text =
         std::fs::read_to_string("assets/data/tech_era_1990s.yaml").map_err(|e| e.to_string())?;
@@ -993,6 +997,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
             busy: false,
             scenario: Some(sc),
             tutorial: tutorial_cfg,
+            autosave: true,
         });
     }
     // Return the new state
@@ -1157,7 +1162,7 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
     let st = g
         .as_mut()
         .ok_or_else(|| "sim not initialized".to_string())?;
-    if let Some(cfg) = st.world.get_resource_mut::<runtime::CampaignScenarioRes>() {
+    if let Some(mut cfg) = st.world.get_resource_mut::<runtime::CampaignScenarioRes>() {
         cfg.difficulty = Some(level.clone());
     }
     // Load presets
@@ -1278,7 +1283,7 @@ struct SaveInfo {
     progress: u32,
 }
 
-async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
+async fn save_now(name: String, dom: core::World, world: EcsWorld) -> Result<i64, String> {
     use persistence as p;
     let pool = p::init_db(p::default_sqlite_url())
         .await
@@ -1350,7 +1355,8 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
         const N: usize = 6;
         if let Ok(list) = p::list_saves_by_prefix(&pool, "auto-").await {
             if list.len() > N {
-                for old in list.into_iter().take(list.len() - N) {
+                let to_delete = list.len() - N;
+                for old in list.into_iter().take(to_delete) {
                     let _ = p::delete_save(&pool, old.id).await;
                 }
             }
@@ -1361,7 +1367,7 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
 
 #[tauri::command]
 async fn sim_save(name: Option<String>) -> Result<i64, String> {
-    let (dom, world) = {
+    let (dom, world, nm) = {
         let g = SIM_STATE.read().unwrap();
         let st = g
             .as_ref()
@@ -1372,12 +1378,12 @@ async fn sim_save(name: Option<String>) -> Result<i64, String> {
             .0
             .macro_state
             .date;
-        let nm = name.unwrap_or_else(|| {
+        let nm = name.clone().unwrap_or_else(|| {
             format!("manual-{}{:02}{:02}", date.year(), date.month(), date.day())
         });
-        (st.dom.clone(), st.world.clone())
+        (st.dom.clone(), runtime::clone_world_state(&st.world), nm)
     };
-    save_now(name.unwrap_or_else(|| "manual".into()), dom, world).await
+    save_now(nm, dom, world).await
 }
 
 #[tauri::command]
@@ -1501,7 +1507,6 @@ async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
     Ok(build_sim_state_dto(st))
 }
 
-#[tauri::command]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct AutosavePolicy {
     enabled: bool,
@@ -1682,6 +1687,8 @@ mod tests {
             dom,
             busy: false,
             scenario: None,
+            tutorial: None,
+            autosave: true,
         });
         // Run two ticks sequentially
         let rt = tauri::async_runtime::TokioRuntime::new().expect("rt");
@@ -1725,6 +1732,8 @@ mod tests {
             dom,
             busy: true,
             scenario: None,
+            tutorial: None,
+            autosave: true,
         });
         // Try tick while busy
         let rt = tauri::async_runtime::TokioRuntime::new().expect("rt");
@@ -1784,6 +1793,8 @@ mod tests {
             dom,
             busy: false,
             scenario: None,
+            tutorial: None,
+            autosave: true,
         });
 
         // Apply price +5%
@@ -1953,6 +1964,8 @@ mod tests {
             dom,
             busy: false,
             scenario: None,
+            tutorial: None,
+            autosave: true,
         });
         // Initial state
         let s1 = sim_state().expect("state");

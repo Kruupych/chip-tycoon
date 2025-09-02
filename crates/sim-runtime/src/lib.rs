@@ -46,7 +46,7 @@ pub struct Stats {
 }
 
 /// Snapshot of aggregated KPIs after running the simulation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct SimSnapshot {
     pub months_run: u32,
     pub cash_cents: i64,
@@ -223,7 +223,7 @@ pub struct Capacity {
 pub struct RnDBudgetCents(pub i64);
 
 /// Finance configuration: cash flow lags (days). 0 = immediate.
-#[derive(Resource, Clone, Copy, Default)]
+#[derive(Resource, Clone, Copy, Default, serde::Serialize, serde::Deserialize, Debug)]
 pub struct FinanceConfig {
     pub revenue_cash_in_days: u16,
     pub cogs_cash_out_days: u16,
