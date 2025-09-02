@@ -221,7 +221,7 @@ function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: st
       <h2>Tutorial</h2>
       {!tut?.active ? (
         <div>
-          <p>No tutorial loaded. You can load it via Campaign -> Restart with tutorial scenario.</p>
+          <p>No tutorial loaded. You can load it via Campaign &rarr; Restart with tutorial scenario.</p>
           <button onClick={() => simCampaignReset("assets/scenarios/tutorial_24m.yaml")}>Load Tutorial</button>
         </div>
       ) : (

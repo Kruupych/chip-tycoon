@@ -30,8 +30,13 @@ pnpm --dir $webRoot add -D @tauri-apps/cli | Out-Null
 Write-Host "Building web frontend"
 pnpm --dir $webRoot build
 
-Write-Host "Running pnpm tauri build (from web with explicit config)"
-pnpm --dir $webRoot exec tauri build --config ../src-tauri/tauri.conf.json
+Write-Host "Running pnpm tauri build (from apps/mgmt-ui)"
+Push-Location $uiRoot
+try {
+  pnpm exec tauri build
+} finally {
+  Pop-Location
+}
 
 # Compute version from root Cargo.toml
 $cargoToml = Get-Content (Join-Path $root 'Cargo.toml') -Raw
