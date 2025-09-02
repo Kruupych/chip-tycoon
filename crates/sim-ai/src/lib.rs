@@ -649,6 +649,7 @@ pub struct AiConfig {
     pub weights: ScoreWeights,
     pub planner: PlannerConfig,
     pub tactics: TacticsConfig,
+    pub product_weights: ProductWeights,
 }
 
 /// Default YAML baked in from the assets directory.
@@ -657,6 +658,20 @@ pub const AI_DEFAULTS_YAML: &str = include_str!("../../../assets/data/ai_default
 impl AiConfig {
     pub fn from_default_yaml() -> Result<AiConfig, serde_yaml::Error> {
         serde_yaml::from_str(AI_DEFAULTS_YAML)
+    }
+}
+
+/// Weights for product attractiveness in sales.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductWeights {
+    pub perf: f32,
+    pub price_rel: f32,
+    pub appeal: f32,
+}
+
+impl Default for ProductWeights {
+    fn default() -> Self {
+        Self { perf: 0.7, price_rel: 0.0, appeal: 0.3 }
     }
 }
 

@@ -31,6 +31,7 @@ pub struct Stats {
     pub market_share: f32,
     pub last_share: f32,
     pub rd_progress: f32,
+    pub last_sold_units: u64,
     pub output_units: u64,
     pub defect_units: u64,
     pub inventory_units: u64,
@@ -92,6 +93,12 @@ pub struct ProductAppeal(pub f32);
 /// Product pipeline resource wraps core pipeline.
 #[derive(Resource, Default, Clone)]
 pub struct Pipeline(pub core::ProductPipeline);
+
+/// Active product characteristics used in sales attractiveness.
+#[derive(Resource, Default, Clone)]
+pub struct ActiveProduct {
+    pub perf_index: f32,
+}
 
 impl Default for Pricing {
     fn default() -> Self {
@@ -170,14 +177,25 @@ pub fn production_system(mut stats: ResMut<Stats>, cap: Res<Capacity>) {
     info!(target: "sim.prod", good, defects, inv = stats.inventory_units, "Production executed");
 }
 
-/// Sales system: sells some inventory at a fixed ASP and cost.
-pub fn sales_system(mut stats: ResMut<Stats>, pricing: Res<Pricing>) {
-    let sell_units = (stats.inventory_units as f64 * 0.5) as u64; // sell 50%
+/// Sales system: sells some inventory weighted by product attractiveness.
+pub fn sales_system(
+    mut stats: ResMut<Stats>,
+    pricing: Res<Pricing>,
+    active: Res<ActiveProduct>,
+    appeal: Res<ProductAppeal>,
+    cfg: Res<AiConfig>,
+) {
+    let att = (active.perf_index * cfg.0.product_weights.perf
+        + appeal.0 * cfg.0.product_weights.appeal)
+        .clamp(0.0, 1.0);
+    let frac = (0.3 + 0.6 * att).clamp(0.0, 1.0);
+    let sell_units = (stats.inventory_units as f64 * frac as f64) as u64;
     let revenue = pricing.asp_usd * Decimal::from(sell_units);
     let cost = pricing.unit_cost_usd * Decimal::from(sell_units);
     let profit = revenue - cost;
     stats.revenue_usd += revenue;
     stats.profit_usd += profit;
+    stats.last_sold_units = sell_units;
     stats.inventory_units = stats.inventory_units.saturating_sub(sell_units);
     info!(target: "sim.sales", sell_units, revenue = %stats.revenue_usd, profit = %stats.profit_usd, asp = %pricing.asp_usd, "Sales updated");
 }
@@ -205,7 +223,7 @@ pub fn finance_system_billing(
         let committed = c.wafers_per_month as i64;
         let used_from_this = remaining_used_wafers.min(committed).max(0);
         remaining_used_wafers = (remaining_used_wafers - used_from_this).max(0);
-        let min_bill = (c.take_or_pay_frac.max(0.0).min(1.0) * (committed as f32)).ceil() as i64;
+        let min_bill = (c.take_or_pay_frac.clamp(0.0, 1.0) * (committed as f32)).ceil() as i64;
         let billed_wafers = used_from_this.max(min_bill);
         let price = if c.billing_cents_per_wafer > 0 {
             c.billing_cents_per_wafer
@@ -222,6 +240,8 @@ pub fn finance_system_billing(
 pub fn tapeout_system(
     mut pipeline: ResMut<Pipeline>,
     mut appeal: ResMut<ProductAppeal>,
+    mut active: ResMut<ActiveProduct>,
+    mut pricing: ResMut<Pricing>,
     dom: Res<DomainWorld>,
 ) {
     let date = dom.0.macro_state.date;
@@ -235,6 +255,17 @@ pub fn tapeout_system(
         }
     }
     if let Some(spec) = released_spec {
+        active.perf_index = spec.perf_index;
+        // Recompute unit cost from node wafer cost, die area and yield
+        let node = dom.0.tech_tree.iter().find(|n| n.id == spec.tech_node);
+        if let Some(n) = node {
+            let units_per_wafer = ((400.0f32 / spec.die_area_mm2).floor() as i64).max(1);
+            let yield_dec = n.yield_baseline.max(Decimal::new(1, 2));
+            let denom = Decimal::from(units_per_wafer) * yield_dec;
+            if denom > Decimal::ZERO {
+                pricing.unit_cost_usd = n.wafer_cost_usd / denom;
+            }
+        }
         pipeline.0.released.push(spec);
         appeal.0 = (appeal.0 + 0.05).clamp(0.0, 0.5);
     }
@@ -424,6 +455,7 @@ pub fn ai_quarterly_planner_system(
                         chiplet: false,
                     },
                     die_area_mm2: 100.0,
+                    perf_index: 0.6,
                     tdp_w: 65.0,
                     bom_usd: 50.0,
                 };
@@ -481,6 +513,7 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(CapacityBook::default());
     w.insert_resource(Pricing::default());
     w.insert_resource(ProductAppeal::default());
+    w.insert_resource(ActiveProduct::default());
     w.insert_resource(Pipeline::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
@@ -517,7 +550,7 @@ pub fn run_months_with_telemetry(
         let pricing = world.resource::<Pricing>().clone();
         let mut stats = world.resource_mut::<Stats>();
         stats.months_run = stats.months_run.saturating_add(1);
-        let sold_units = (stats.inventory_units as f64 * 0.5) as u64; // mirrors sales_system
+        let sold_units = stats.last_sold_units;
         let asp = pricing.asp_usd;
         let unit_cost = pricing.unit_cost_usd;
         let revenue = asp * Decimal::from(sold_units);
@@ -664,6 +697,42 @@ mod tests {
         schedule.run(&mut w);
         let pricing = w.resource::<Pricing>();
         assert!(pricing.asp_usd > Decimal::new(300, 0));
+    }
+
+    #[test]
+    fn stronger_product_sells_more() {
+        let dom = core::World {
+            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: Decimal::new(1,0), freq_ghz_baseline: Decimal::new(1,0), leakage_index: Decimal::new(1,0), yield_baseline: Decimal::new(9,1), wafer_cost_usd: Decimal::new(1000,0), mask_set_cost_usd: Decimal::new(5000,0), dependencies: vec![] }],
+            companies: vec![core::Company { name: "A".into(), cash_usd: Decimal::new(1_000_000, 0), debt_usd: Decimal::ZERO, ip_portfolio: vec![] }],
+            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+        };
+        let cfg = core::SimConfig { tick_days: 30, rng_seed: 42 };
+        // World A: weaker product
+        let mut wa = init_world(dom.clone(), cfg.clone());
+        {
+            let mut ap = wa.resource_mut::<ActiveProduct>();
+            ap.perf_index = 0.2;
+            let mut stats = wa.resource_mut::<Stats>();
+            stats.inventory_units = 100_000;
+        }
+        let mut sched = bevy_ecs::schedule::Schedule::default();
+        sched.add_systems(sales_system);
+        sched.run(&mut wa);
+        let sold_a = wa.resource::<Stats>().last_sold_units;
+        // World B: stronger product
+        let mut wb = init_world(dom, cfg);
+        {
+            let mut ap = wb.resource_mut::<ActiveProduct>();
+            ap.perf_index = 0.9;
+            let mut stats = wb.resource_mut::<Stats>();
+            stats.inventory_units = 100_000;
+        }
+        let mut sched2 = bevy_ecs::schedule::Schedule::default();
+        sched2.add_systems(sales_system);
+        sched2.run(&mut wb);
+        let sold_b = wb.resource::<Stats>().last_sold_units;
+        assert!(sold_b > sold_a);
     }
 
     #[test]
@@ -930,6 +999,7 @@ mod tests {
                     chiplet: false,
                 },
                 die_area_mm2: 100.0,
+                perf_index: 0.8,
                 tdp_w: 65.0,
                 bom_usd: 50.0,
             };

@@ -79,6 +79,8 @@ pub struct ProductSpec {
     pub microarch: MicroArch,
     /// Die area in mm² (> 0).
     pub die_area_mm2: f32,
+    /// Normalized performance index [0,1].
+    pub perf_index: f32,
     /// Thermal Design Power in Watts (>= 0).
     pub tdp_w: f32,
     /// Bill of materials cost in USD (>= 0).
@@ -225,6 +227,9 @@ pub fn validate_product_spec(p: &ProductSpec) -> Result<(), ValidationError> {
     if p.die_area_mm2 <= 0.0 {
         return Err(ValidationError::NonPositiveArea);
     }
+    if !p.perf_index.is_finite() || p.perf_index < 0.0 || p.perf_index > 1.0 {
+        return Err(ValidationError::NonFinite);
+    }
     if p.tdp_w < 0.0 || p.bom_usd < 0.0 {
         return Err(ValidationError::NegativeMoney);
     }
@@ -365,6 +370,7 @@ mod tests {
                 tech_node: TechNodeId("N7".to_string()),
                 microarch: MicroArch { ipc_index: 1.0, pipeline_depth: 10, cache_l1_kb: 64, cache_l2_mb: 1.0, chiplet: false },
                 die_area_mm2: area,
+                perf_index: 0.5,
                 tdp_w: tdp,
                 bom_usd: bom,
             };

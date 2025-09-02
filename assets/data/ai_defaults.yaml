@@ -22,3 +22,7 @@ tactics:
   cash_liquidity_floor_k: 0.5
   rd_boost_on_expedite: 0.01
   rd_cut_on_cash_low: 0.01
+product_weights:
+  perf: 0.7
+  price_rel: 0.0
+  appeal: 0.3
