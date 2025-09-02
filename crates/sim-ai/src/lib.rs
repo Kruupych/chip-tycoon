@@ -330,11 +330,8 @@ fn apply_action(state: &mut PlannerState, action: PlanAction, cfg: &PlannerConfi
         PlanAction::AdjustPriceFrac(df) => {
             let factor = Decimal::from_f32_retain(1.0 + df).unwrap_or(Decimal::ONE);
             let mut asp = state.asp * factor;
-            // Enforce minimum margin
-            let min_price = state.unit_cost
-                * Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap_or(Decimal::ONE);
-            if asp < min_price {
-                asp = min_price;
+            if !respects_min_margin(asp, state.unit_cost, cfg.min_margin_frac) {
+                asp = min_price(state.unit_cost, cfg.min_margin_frac);
             }
             state.asp = asp;
         }
@@ -626,14 +623,11 @@ pub fn decide_tactics(
     }
     // Enforce margin floor: if price cut would violate, clamp delta to floor
     if price_df < 0.0 {
-        let min_price = unit_cost
-            * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac)
-                .unwrap_or(Decimal::ONE);
-        let new_price =
-            asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
-        if new_price < min_price {
-            // Compute the maximal allowed negative delta
-            let max_negative = (min_price / asp).to_f32().unwrap_or(1.0) - 1.0;
+        let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
+        if !respects_min_margin(new_price, unit_cost, cfg.min_margin_frac) {
+            // Compute maximal allowed negative delta
+            let minp = min_price(unit_cost, cfg.min_margin_frac);
+            let max_negative = (minp / asp).to_f32().unwrap_or(1.0) - 1.0;
             price_df = max_negative.max(0.0);
         }
     }
@@ -663,6 +657,16 @@ impl AiConfig {
     pub fn from_default_yaml() -> Result<AiConfig, serde_yaml::Error> {
         serde_yaml::from_str(AI_DEFAULTS_YAML)
     }
+}
+
+/// Shared min-margin helpers
+pub fn min_price(unit_cost: Decimal, min_margin_frac: f32) -> Decimal {
+    let f = rust_decimal::Decimal::from_f32_retain(1.0 + min_margin_frac).unwrap_or(Decimal::ONE);
+    unit_cost * f
+}
+
+pub fn respects_min_margin(asp: Decimal, unit_cost: Decimal, min_margin_frac: f32) -> bool {
+    asp >= min_price(unit_cost, min_margin_frac)
 }
 
 #[cfg(test)]
