@@ -1,4 +1,4 @@
-/target
+/target/
 target/
 **/*.db
 **/*.db-journal
@@ -9,3 +9,5 @@ assets/generated/
 criterion/
 apps/mgmt-ui/web/node_modules/
 apps/mgmt-ui/web/dist/
+node_modules/
+dist/
