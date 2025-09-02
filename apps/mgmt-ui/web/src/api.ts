@@ -126,3 +126,8 @@ export type TutorialDto = {
 export async function simTutorialState() {
   return invoke<TutorialDto>("sim_tutorial_state");
 }
+
+export type BuildInfo = { version: string; git_sha: string; build_date: string };
+export async function simBuildInfo() {
+  return invoke<BuildInfo>("sim_build_info");
+}

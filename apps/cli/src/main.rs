@@ -15,12 +15,14 @@ fn parse_args() -> (
     Option<String>,
     Option<String>,
     bool,
+    bool,
 ) {
     let mut scenario: Option<String> = None;
     let mut years: Option<u32> = None;
     let mut campaign: Option<String> = None;
     let mut export_path: Option<String> = None;
     let mut export_dry_run: bool = true; // default to dry-run for export
+    let mut show_version: bool = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -33,10 +35,20 @@ fn parse_args() -> (
                     export_dry_run = v == "1" || v.eq_ignore_ascii_case("true");
                 }
             }
+            "--version" | "-V" => {
+                show_version = true;
+            }
             _ => {}
         }
     }
-    (scenario, years, campaign, export_path, export_dry_run)
+    (
+        scenario,
+        years,
+        campaign,
+        export_path,
+        export_dry_run,
+        show_version,
+    )
 }
 
 fn minimal_world() -> World {
@@ -115,7 +127,14 @@ fn main() -> Result<()> {
         .with_max_level(Level::INFO)
         .init();
 
-    let (scenario, years, campaign, export_path, export_dry_run) = parse_args();
+    let (scenario, years, campaign, export_path, export_dry_run, show_version) = parse_args();
+    if show_version {
+        let ver = env!("CARGO_PKG_VERSION");
+        let sha = option_env!("GIT_SHA").unwrap_or("unknown");
+        let date = option_env!("BUILD_DATE").unwrap_or("");
+        println!("chip-tycoon cli v{} ({} {})", ver, sha, date);
+        return Ok(());
+    }
     info!(?scenario, ?years, ?campaign, ?export_path, "starting CLI");
 
     if let Some(camp) = campaign {

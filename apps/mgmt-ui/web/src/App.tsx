@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto, simBuildInfo, BuildInfo } from "./api";
 import { t, getLang, setLang } from "./i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -40,6 +40,8 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     queryFn: simTutorialState,
     onSuccess: (data) => setTut(data),
   });
+  const [build, setBuild] = useState<BuildInfo | null>(null);
+  useEffect(() => { (async ()=>{ try { setBuild(await simBuildInfo()); } catch {} })(); }, []);
   const refetchState = async () => {
     await qc.invalidateQueries({ queryKey: ["sim_state"] });
     await qc.invalidateQueries({ queryKey: ["sim_tutorial"] });
@@ -92,6 +94,9 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
             <option value="en">EN</option>
             <option value="ru">RU</option>
           </select>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
+          {build ? `v${build.version} · ${build.git_sha} · ${build.build_date}` : "v?"}
         </div>
         <div>
           {[

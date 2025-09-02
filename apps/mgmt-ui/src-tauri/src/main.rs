@@ -727,10 +727,22 @@ fn main() {
     *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None, tutorial: None, autosave: true });
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave])
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_export_campaign])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_build_info])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_export_campaign, sim_build_info])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct BuildInfo { version: String, git_sha: String, build_date: String }
+
+#[tauri::command]
+fn sim_build_info() -> Result<BuildInfo, String> {
+    Ok(BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_sha: option_env!("GIT_SHA").unwrap_or("unknown").to_string(),
+        build_date: option_env!("BUILD_DATE").unwrap_or("").to_string(),
+    })
 }
 
 #[tauri::command]
