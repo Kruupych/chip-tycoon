@@ -6,6 +6,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::NonSendMut;
+pub use bevy_ecs::world::World;
 use chrono::Datelike;
 use chrono::NaiveDate;
 use modkit as mods;

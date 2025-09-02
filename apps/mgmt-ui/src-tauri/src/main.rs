@@ -6,7 +6,6 @@ use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use bevy_ecs::world::World as EcsWorld;
 use sim_core as core;
 use sim_runtime as runtime;
 use std::sync::{Arc, Mutex, RwLock};
@@ -48,7 +47,7 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
 }
 
 struct SimState {
-    world: EcsWorld,
+    world: runtime::World,
     dom: core::World,
     busy: bool,
     scenario: Option<CampaignScenario>,
@@ -408,6 +407,7 @@ struct TutorialStepCfg {
 struct TutorialNavCfg {
     page: String,
     label: String,
+    #[allow(dead_code)]
     button: String,
 }
 
@@ -416,6 +416,7 @@ struct CampaignScenario {
     start_date: String,
     end_date: String,
     player_start_cash_cents: i64,
+    #[allow(dead_code)]
     ai_companies: usize,
     goals: Vec<YamlGoal>,
     fail_conditions: Vec<YamlFail>,
@@ -454,12 +455,14 @@ enum YamlFail {
 
 // -------- Asset schema DTOs --------
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct MarketsRoot {
     segments: Vec<MarketSegSchema>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(untagged)]
+#[allow(dead_code)]
 enum U64OrStr {
     U(u64),
     S(String),
@@ -467,12 +470,14 @@ enum U64OrStr {
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(untagged)]
+#[allow(dead_code)]
 enum I64OrStrV {
     I(i64),
     S(String),
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct MarketStepSchema {
     start: String,
     months: u32,
@@ -485,6 +490,7 @@ struct MarketStepSchema {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct MarketSegSchema {
     id: String,
     name: String,
@@ -497,11 +503,13 @@ struct MarketSegSchema {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct TechRoot {
     nodes: Vec<TechNodeSchema>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct TechNodeSchema {
     id: String,
     year_available: i32,
@@ -921,7 +929,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
                     .map_err(|e| e.to_string())?;
                 cfg.goals.push(runtime::GoalKind::ReachShare {
                     segment: segment.clone(),
-                    min_share: *min_share,
+                    min_share: min_share.clone(),
                     deadline: d,
                 });
             }
@@ -940,7 +948,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
                 let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
                     .map_err(|e| e.to_string())?;
                 cfg.goals.push(runtime::GoalKind::ProfitTarget {
-                    profit_cents: *profit_cents,
+                    profit_cents: profit_cents.clone(),
                     deadline: d,
                 });
             }
@@ -970,7 +978,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
                     .map_err(|e| e.to_string())?;
                 cfg.fails.push(runtime::FailCondKind::ShareBelow {
                     segment: segment.clone(),
-                    min_share: *min_share,
+                    min_share: min_share.clone(),
                     deadline: d,
                 });
             }
@@ -1100,24 +1108,7 @@ fn main() {
         autosave: true,
     });
 
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            sim_tick,
-            sim_tick_quarter,
-            sim_plan_quarter,
-            sim_override,
-            sim_state,
-            sim_lists,
-            sim_campaign_reset,
-            sim_balance_info,
-            sim_campaign_set_difficulty,
-            sim_tutorial_state,
-            sim_save,
-            sim_list_saves,
-            sim_load,
-            sim_set_autosave,
-            sim_build_info
-        ])
+    tauri::Builder::<tauri::Wry>::default()
         .invoke_handler(tauri::generate_handler![
             sim_tick,
             sim_tick_quarter,
@@ -1283,7 +1274,7 @@ struct SaveInfo {
     progress: u32,
 }
 
-async fn save_now(name: String, dom: core::World, world: EcsWorld) -> Result<i64, String> {
+async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
     use persistence as p;
     let pool = p::init_db(p::default_sqlite_url())
         .await

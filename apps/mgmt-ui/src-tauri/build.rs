@@ -1,4 +1,13 @@
 fn main() {
+    // Ensure a default icon exists so tauri-build doesn't fail locally
+    let icon_path = std::path::Path::new("icons/icon.png");
+    if !icon_path.exists() {
+        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P8z/C/HwAFgwJ/l9Wl5QAAAABJRU5ErkJggg==";
+        if let Ok(bytes) = base64::decode(png_b64) {
+            let _ = std::fs::create_dir_all("icons");
+            let _ = std::fs::write(icon_path, bytes);
+        }
+    }
     // Preserve tauri build
     tauri_build::build();
     // Embed git sha and build date similarly to CLI
