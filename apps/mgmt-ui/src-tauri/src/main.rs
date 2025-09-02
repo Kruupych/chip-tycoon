@@ -12,6 +12,7 @@ struct SimState {
     dom: core::World,
     busy: bool,
     scenario: Option<CampaignScenario>,
+    tutorial: Option<TutorialCfg>,
 }
 
 static SIM_STATE: Lazy<Arc<RwLock<Option<SimState>>>> =
@@ -272,6 +273,28 @@ struct DtoGoal { kind: String, desc: String, progress: f32, deadline: String, do
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DtoCampaign { status: String, goals: Vec<DtoGoal>, start: String, end: String, difficulty: Option<String> }
+
+// -------- Tutorial DTOs --------
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct DtoTutStep { id: String, desc: String, hint: String, nav_page: String, nav_label: String, done: bool }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct DtoTutorial { active: bool, current_step: u8, steps: Vec<DtoTutStep> }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct TutorialCfg {
+    #[serde(default)]
+    cash_threshold_cents_month24: i64,
+    #[serde(default)]
+    steps: Vec<TutorialStepCfg>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct TutorialStepCfg { id: String, desc: String, hint: String, nav: TutorialNavCfg }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct TutorialNavCfg { page: String, label: String, button: String }
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct CampaignScenario {
@@ -549,10 +572,18 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     }
     world.insert_resource(cfg);
     world.insert_resource(runtime::CampaignStateRes::default());
+    // Optional tutorial section
+    let tutorial_cfg: Option<TutorialCfg> = match serde_yaml::from_str::<serde_yaml::Value>(&text) {
+        Ok(v) => v.get("tutorial").and_then(|t| serde_yaml::from_value::<TutorialCfg>(t.clone()).ok()),
+        Err(_) => None,
+    };
+    if let Some(tcfg) = &tutorial_cfg {
+        runtime::init_tutorial(&mut world, tcfg.cash_threshold_cents_month24);
+    }
     // Replace global state
     {
         let mut guard = SIM_STATE.write().unwrap();
-        *guard = Some(SimState { world, dom, busy: false, scenario: Some(sc) });
+        *guard = Some(SimState { world, dom, busy: false, scenario: Some(sc), tutorial: tutorial_cfg });
     }
     // Return the new state
     let guard = SIM_STATE.read().unwrap();
@@ -620,10 +651,10 @@ fn main() {
     ecs.insert_resource(markets);
     // Default campaign events for 1990s
     ecs.insert_resource(runtime::load_market_events_yaml("assets/events/campaign_1990s.yaml"));
-    *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None });
+    *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None, tutorial: None });
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -664,6 +695,28 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
                 .collect(),
         })
         .collect()
+}
+
+#[tauri::command]
+fn sim_tutorial_state() -> Result<DtoTutorial, String> {
+    let g = SIM_STATE.read().unwrap();
+    let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let world = &st.world;
+    let tut = world.resource::<runtime::TutorialState>();
+    let mut steps: Vec<DtoTutStep> = Vec::new();
+    if let Some(cfg) = &st.tutorial {
+        for s in &cfg.steps {
+            let done = match s.id.as_str() {
+                "price_cut" => tut.step1_price_cut_done,
+                "foundry_contract" => tut.step2_contract_done,
+                "tapeout_expedite" => tut.step3_tapeout_expedite_done,
+                "positive_cash_24m" => tut.step4_cash_24m_done,
+                _ => false,
+            };
+            steps.push(DtoTutStep { id: s.id.clone(), desc: s.desc.clone(), hint: s.hint.clone(), nav_page: s.nav.page.clone(), nav_label: s.nav.label.clone(), done });
+        }
+    }
+    Ok(DtoTutorial { active: tut.enabled, current_step: tut.current_step_index, steps })
 }
 
 #[cfg(test)]

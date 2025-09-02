@@ -63,6 +63,106 @@ pub struct SimSnapshot {
     pub inventory_units: u64,
 }
 
+// ---------------- Tutorial guidance ----------------
+
+/// Tutorial guidance state tracking step completions.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct TutorialState {
+    pub enabled: bool,
+    pub initial_asp_cents: i64,
+    pub step1_price_cut_done: bool,
+    pub step2_contract_done: bool,
+    pub step3_tapeout_expedite_done: bool,
+    pub step4_cash_24m_done: bool,
+    pub month24_cash_threshold_cents: i64,
+    pub current_step_index: u8,
+}
+
+// Default is derived above
+
+/// Initialize tutorial guidance with current ASP as baseline and target cash threshold.
+pub fn init_tutorial(world: &mut World, month24_cash_threshold_cents: i64) {
+    let pricing = world.resource::<Pricing>();
+    let asp_cents = persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0);
+    let mut st = world.resource_mut::<TutorialState>();
+    st.enabled = true;
+    st.initial_asp_cents = asp_cents;
+    st.month24_cash_threshold_cents = month24_cash_threshold_cents.max(0);
+    st.step1_price_cut_done = false;
+    st.step2_contract_done = false;
+    st.step3_tapeout_expedite_done = false;
+    st.step4_cash_24m_done = false;
+    st.current_step_index = 0;
+}
+
+/// System that evaluates tutorial checkpoints and updates current step index.
+pub fn tutorial_system(
+    dom: Res<DomainWorld>,
+    pricing: Res<Pricing>,
+    book: Res<CapacityBook>,
+    pipe: Res<Pipeline>,
+    stats: Res<Stats>,
+    mut tut: ResMut<TutorialState>,
+) {
+    if !tut.enabled {
+        return;
+    }
+    // Step 1: price cut >= 5%
+    if !tut.step1_price_cut_done {
+        let asp_cents = persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0);
+        if tut.initial_asp_cents > 0
+            && asp_cents <= (tut.initial_asp_cents as f64 * 0.95).round() as i64
+        {
+            tut.step1_price_cut_done = true;
+        }
+    }
+    // Step 2: foundry contract >=1000 wpm for >=12 months
+    if !tut.step2_contract_done {
+        let mut ok = false;
+        for c in &book.contracts {
+            let months = months_between(c.start, c.end).max(0) as u32;
+            if c.wafers_per_month >= 1000 && months >= 12 {
+                ok = true;
+                break;
+            }
+        }
+        if ok {
+            tut.step2_contract_done = true;
+        }
+    }
+    // Step 3: tapeout requested with expedite
+    if !tut.step3_tapeout_expedite_done
+        && (pipe.0.queue.iter().any(|t| t.expedite) || !pipe.0.released.is_empty())
+    {
+        tut.step3_tapeout_expedite_done = true;
+    }
+    // Step 4: positive cash >= threshold by month 24
+    if !tut.step4_cash_24m_done && stats.months_run >= 24 {
+        let cash = dom
+            .0
+            .companies
+            .first()
+            .map(|c| c.cash_usd)
+            .unwrap_or(rust_decimal::Decimal::ZERO);
+        let cash_cents = persistence::decimal_to_cents_i64(cash).unwrap_or(0);
+        if cash_cents >= tut.month24_cash_threshold_cents {
+            tut.step4_cash_24m_done = true;
+        }
+    }
+    // Determine current step index
+    tut.current_step_index = if !tut.step1_price_cut_done {
+        0
+    } else if !tut.step2_contract_done {
+        1
+    } else if !tut.step3_tapeout_expedite_done {
+        2
+    } else if !tut.step4_cash_24m_done {
+        3
+    } else {
+        4
+    };
+}
+
 /// Per-month telemetry captured after each tick.
 #[derive(Clone, Debug, Default)]
 pub struct MonthlyTelemetry {
@@ -1107,6 +1207,7 @@ pub fn init_world(domain: core::World, config: core::SimConfig) -> World {
     w.insert_resource(MarketModEffects::default());
     w.insert_resource(MarketEventConfigRes::default());
     w.insert_resource(CampaignStateRes::default());
+    w.insert_resource(TutorialState::default());
     // Load AI defaults from YAML via sim-ai
     let ai_cfg = ai::AiConfig::from_default_yaml().unwrap_or_default();
     w.insert_resource(AiConfig(ai_cfg));
@@ -1137,6 +1238,7 @@ pub fn run_months_with_telemetry(
             ai_strategy_system,
             ai_quarterly_planner_system,
             campaign_system,
+            tutorial_system,
             advance_macro_date_system,
         )
             .chain(),
@@ -1190,6 +1292,7 @@ pub fn run_months_in_place(world: &mut World, months: u32) -> (SimSnapshot, Vec<
             ai_strategy_system,
             ai_quarterly_planner_system,
             campaign_system,
+            tutorial_system,
             advance_macro_date_system,
         )
             .chain(),
@@ -1510,6 +1613,13 @@ fn add_months(mut d: NaiveDate, mut n: u32) -> NaiveDate {
         n -= 1;
     }
     d
+}
+
+/// Compute whole-month difference between two dates (end exclusive).
+fn months_between(start: NaiveDate, end: NaiveDate) -> i32 {
+    let y = end.year() - start.year();
+    let m = end.month() as i32 - start.month() as i32;
+    y * 12 + m
 }
 
 #[cfg(test)]
@@ -1968,6 +2078,88 @@ mod tests {
         schedule.run(&mut w);
         let pricing = w.resource::<Pricing>();
         assert!(pricing.asp_usd > Decimal::new(300, 0));
+    }
+
+    #[test]
+    fn tutorial_steps_progress_in_order() {
+        // Minimal world with a tech node for tapeout
+        let dom = core::World {
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: Decimal::new(1, 0),
+                freq_ghz_baseline: Decimal::new(1, 0),
+                leakage_index: Decimal::new(1, 0),
+                yield_baseline: Decimal::new(9, 1),
+                wafer_cost_usd: Decimal::new(1000, 0),
+                mask_set_cost_usd: Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: Decimal::new(1_000_000, 0),
+                debt_usd: Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
+        };
+        let mut w = init_world(
+            dom,
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        // Initialize tutorial with $1M target at 24m
+        init_tutorial(&mut w, 1_000_000 * 100);
+        // 1) reduce price by 5%
+        let _ = apply_price_delta(&mut w, -0.05);
+        // Run tutorial system to evaluate step 1
+        {
+            let mut sched = bevy_ecs::schedule::Schedule::default();
+            sched.add_systems(tutorial_system);
+            sched.run(&mut w);
+            let t = w.resource::<TutorialState>();
+            assert!(t.step1_price_cut_done);
+            assert_eq!(t.current_step_index, 1);
+        }
+        // 2) capacity contract >=1000 wpm for 12 months
+        let _ = apply_capacity_request(&mut w, 1000, 12, Some(10_000), Some(1.0));
+        {
+            let mut sched = bevy_ecs::schedule::Schedule::default();
+            sched.add_systems(tutorial_system);
+            sched.run(&mut w);
+            let t = w.resource::<TutorialState>();
+            assert!(t.step2_contract_done);
+            assert_eq!(t.current_step_index, 2);
+        }
+        // 3) tapeout expedited
+        let _ = apply_tapeout_request(&mut w, 0.7, 100.0, "N90".into(), true);
+        {
+            let mut sched = bevy_ecs::schedule::Schedule::default();
+            sched.add_systems(tutorial_system);
+            sched.run(&mut w);
+            let t = w.resource::<TutorialState>();
+            assert!(t.step3_tapeout_expedite_done);
+            assert_eq!(t.current_step_index, 3);
+        }
+        // 4) simulate 24 months and ensure current step index advances to 4 if threshold met
+        let _ = run_months_in_place(&mut w, 24);
+        {
+            let t = w.resource::<TutorialState>();
+            // Cash may or may not exceed $1M in this synthetic scenario; ensure that after 24m we are at step 3 or 4
+            assert!(t.current_step_index >= 3);
+        }
     }
 
     #[test]

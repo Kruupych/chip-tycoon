@@ -117,3 +117,12 @@ export async function simBalanceInfo() {
 export async function simCampaignSetDifficulty(level: string) {
   return invoke("sim_campaign_set_difficulty", { level });
 }
+
+export type TutorialDto = {
+  active: boolean;
+  current_step: number;
+  steps: { id: string; desc: string; hint: string; nav_page: string; nav_label: string; done: boolean }[];
+};
+export async function simTutorialState() {
+  return invoke<TutorialDto>("sim_tutorial_state");
+}

@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto } from "./api";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 export function App() {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
-  const [nav, setNav] = useState<"dashboard" | "campaign" | "markets" | "rd" | "capacity" | "ai">(
+  const [nav, setNav] = useState<"dashboard" | "tutorial" | "campaign" | "markets" | "rd" | "capacity" | "ai">(
     "dashboard"
   );
   const [qc] = useState(() => new QueryClient());
@@ -20,6 +20,7 @@ export function App() {
 function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
   const qc = useQueryClient();
+  const [tut, setTut] = useState<TutorialDto | null>(null);
   // Lists and state queries
   useQuery({
     queryKey: ["sim_lists"],
@@ -31,8 +32,14 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     queryFn: getSimState,
     onSuccess: (data) => setStateDto(data),
   });
+  useQuery({
+    queryKey: ["sim_tutorial"],
+    queryFn: simTutorialState,
+    onSuccess: (data) => setTut(data),
+  });
   const refetchState = async () => {
     await qc.invalidateQueries({ queryKey: ["sim_state"] });
+    await qc.invalidateQueries({ queryKey: ["sim_tutorial"] });
   };
   // Mutations
   const tickMut = useMutation({
@@ -79,6 +86,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         <div>
           {[
             ["dashboard", "Dashboard"],
+            ["tutorial", "Tutorial"],
             ["campaign", "Campaign"],
             ["markets", "Markets"],
             ["rd", "R&D / Tapeout"],
@@ -110,7 +118,8 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         <div style={{ marginBottom: 8, color: "#666" }}>
           {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
         </div>
-        {nav === "dashboard" && <Dashboard />}
+        {nav === "dashboard" && <Dashboard tut={tut} onGoto={(p)=>setNav(p as any)} />}
+        {nav === "tutorial" && <TutorialPage tut={tut} onGoto={(p)=>setNav(p as any)} />}
         {nav === "campaign" && <Campaign />}
         {nav === "markets" && <Markets onOverride={(p)=>overrideMut.mutate(p as any)} />}
         {nav === "rd" && <RD onOverride={(p)=>overrideMut.mutate(p as any)} />}
@@ -125,7 +134,7 @@ function cents(n?: number) {
   return `$${((n ?? 0) / 100).toFixed(2)}`;
 }
 
-function Dashboard() {
+function Dashboard({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: string) => void }) {
   const { snapshot, stateDto, history } = useAppStore();
   if (!stateDto) return <div>No data yet.</div>;
   const kpi = stateDto.kpi;
@@ -134,6 +143,7 @@ function Dashboard() {
     <div>
       <h2>Dashboard</h2>
       <MissionHUD />
+      <TutorialHUD tut={tut} onGoto={onGoto} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         <Kpi label="Cash" value={cents(kpi.cash_cents)} />
         <Kpi label="Revenue" value={cents(kpi.revenue_cents)} />
@@ -167,6 +177,51 @@ function MissionHUD() {
           <li key={i}>{g.desc} — {(g.progress * 100).toFixed(0)}% (by {g.deadline})</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function TutorialHUD({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: string) => void }) {
+  if (!tut?.active || !tut.steps?.length) return null;
+  const idx = Math.min(tut.current_step, tut.steps.length);
+  const next = tut.steps[idx] ?? null;
+  if (!next) return null;
+  return (
+    <div style={{ padding: 8, border: "1px dashed #cbd5e1", margin: "8px 0", borderRadius: 6, background: "#f8fafc" }}>
+      <strong>Next step:</strong> {next.desc}
+      <button style={{ marginLeft: 8 }} onClick={() => onGoto(next.nav_page)}>Go to {next.nav_label}</button>
+      <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{next.hint}</div>
+    </div>
+  );
+}
+
+function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: string) => void }) {
+  return (
+    <div>
+      <h2>Tutorial</h2>
+      {!tut?.active ? (
+        <div>
+          <p>No tutorial loaded. You can load it via Campaign -> Restart with tutorial scenario.</p>
+          <button onClick={() => simCampaignReset("assets/scenarios/tutorial_24m.yaml")}>Load Tutorial</button>
+        </div>
+      ) : (
+        <div>
+          <ol>
+            {tut.steps.map((s, i) => (
+              <li key={s.id} style={{ margin: "8px 0" }}>
+                <span style={{ padding: "2px 6px", borderRadius: 4, background: s.done ? "#dcfce7" : "#fee2e2" }}>{s.done ? "Done" : "Pending"}</span>
+                <span style={{ marginLeft: 8 }}>
+                  {s.desc}
+                </span>
+                <div style={{ fontSize: 12, color: "#64748b" }}>{s.hint}</div>
+                {!s.done && (
+                  <button style={{ marginTop: 4 }} onClick={() => onGoto(s.nav_page)}>Go to {s.nav_label}</button>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }
