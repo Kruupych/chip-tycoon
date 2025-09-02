@@ -59,6 +59,43 @@ async fn sim_tick(months: u32) -> Result<runtime::SimSnapshot, String> {
 }
 
 #[tauri::command]
+async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
+    let state = SIM_STATE.clone();
+    let queue = TICK_QUEUE.clone();
+    let snap = tauri::async_runtime::spawn_blocking(move || {
+        let _q = queue.lock().unwrap();
+        // Check and set busy
+        {
+            let mut guard = state.write().unwrap();
+            let st = guard.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+            if st.busy {
+                return Err("busy".to_string());
+            }
+            st.busy = true;
+        }
+        // Run 3 ticks sequentially
+        let snap = {
+            let mut guard = state.write().unwrap();
+            let st = guard.as_mut().unwrap();
+            let (_s1, _t1) = runtime::run_months_in_place(&mut st.world, 1);
+            let (_s2, _t2) = runtime::run_months_in_place(&mut st.world, 1);
+            let (s3, _t3) = runtime::run_months_in_place(&mut st.world, 1);
+            s3
+        };
+        // Clear busy
+        {
+            let mut guard = state.write().unwrap();
+            let st = guard.as_mut().unwrap();
+            st.busy = false;
+        }
+        Ok::<_, String>(snap)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))??;
+    Ok(snap)
+}
+
+#[tauri::command]
 async fn sim_plan_quarter() -> Result<PlanSummary, String> {
     // Placeholder implementation
     Ok(PlanSummary { decisions: vec!["AdjustPrice(-5%)".into()], expected_score: 0.5 })
@@ -322,7 +359,7 @@ fn main() {
     *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false });
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_plan_quarter, sim_override, sim_state, sim_lists])
+        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
