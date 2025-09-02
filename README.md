@@ -76,3 +76,16 @@ Telemetry
 - unit_cost_cents: Int64
 - margin_cents: Int64
 - revenue_cents: Int64
+
+Cash vs Profit reconciliation
+
+При нулевых лагов (FinanceConfig: revenue/cogs/R&D с 0-дневной задержкой) денежный поток по месяцу рассчитывается так:
+
+cash_{t+1} = cash_t + revenue_cents(t) - cogs_cents(t) - contract_costs_cents(t) - rd_budget_cents(t) - expedite_costs_cents(t)
+
+Суммарно за период Δcash ≈ sum(profit_cents) - capex/expedite/прочие выплаты (с поправкой на округления до центов).
+
+IPC (Tauri)
+
+- sim_state: { date, month_index, companies[], segments[], pricing{asp_cents, unit_cost_cents}, kpi{cash_cents, revenue_cents, cogs_cents, contract_costs_cents, profit_cents, share, rd_pct, output_units, inventory_units}, contracts[], pipeline{queue[], released[]}, ai_plan, config{finance, product_cost} }
+- sim_lists: { tech_nodes[], foundries[], segments[] }

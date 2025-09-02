@@ -99,7 +99,8 @@ fn main() -> Result<()> {
         n_companies, n_nodes, n_segments
     );
     println!(
-        "KPI | months: {} | cash: ${:.2} | revenue: ${:.2} | cogs: ${:.2} | contract_costs: ${:.2} | profit: ${:.2} | asp: ${:.2} | unit_cost: ${:.2} | share: {:.1}% | R&D: {:.1}% | output: {} | defects: {} | inv: {}",
+        "KPI | date: {} | months: {} | cash: ${:.2} | revenue: ${:.2} | cogs: ${:.2} | contract_costs: ${:.2} | profit: ${:.2} | asp: ${:.2} | unit_cost: ${:.2} | share: {:.1}% | R&D: {:.1}% | output: {} | defects: {} | inv: {}",
+        ecs_world.resource::<sim_runtime::DomainWorld>().0.macro_state.date,
         snap.months_run,
         (snap.cash_cents as f64) / 100.0,
         (snap.revenue_cents as f64) / 100.0,
