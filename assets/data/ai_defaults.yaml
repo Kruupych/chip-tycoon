@@ -1,0 +1,24 @@
+weights:
+  share: 0.4
+  margin: 0.3
+  liquidity: 0.2
+  portfolio: 0.1
+planner:
+  beam_width: 3
+  months: 24
+  quarter_step: 3
+  discount: 0.99
+  min_margin_frac: 0.05
+  price_step_frac: 0.05
+  capacity_step_units: 10000
+  price_pref_beta: 1.5
+  competitor_attractiveness: 1.0
+tactics:
+  share_drop_delta: 0.05
+  price_epsilon_frac: 0.02
+  min_margin_frac: 0.05
+  shortage_raise_threshold: 1.2
+  shortage_raise_epsilon_frac: 0.02
+  cash_liquidity_floor_k: 0.5
+  rd_boost_on_expedite: 0.01
+  rd_cut_on_cash_low: 0.01

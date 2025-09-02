@@ -486,3 +486,135 @@ mod planner_tests {
         }
     }
 }
+
+// -------------- Tactics (behavior tree style) --------------
+
+/// Configuration thresholds for monthly tactics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TacticsConfig {
+    /// If share drop over previous month exceeds this delta, reduce price by epsilon.
+    pub share_drop_delta: f32,
+    /// Magnitude of price change when reacting to share drop.
+    pub price_epsilon_frac: f32,
+    /// Floor on margin as a fraction of unit cost (e.g., 0.05 = 5%).
+    pub min_margin_frac: f32,
+    /// If demand/supply ratio exceeds this, raise price by shortage epsilon.
+    pub shortage_raise_threshold: f32,
+    /// Magnitude of price increase when shortage detected.
+    pub shortage_raise_epsilon_frac: f32,
+    /// Below this liquidity level, cut R&D by this amount monthly until stable.
+    pub cash_liquidity_floor_k: f32,
+    /// R&D boost when expediting toward a target (simple stand-in behavior).
+    pub rd_boost_on_expedite: f32,
+    /// R&D cut applied when liquidity below floor.
+    pub rd_cut_on_cash_low: f32,
+}
+
+impl Default for TacticsConfig {
+    fn default() -> Self {
+        Self {
+            share_drop_delta: 0.05,
+            price_epsilon_frac: 0.02,
+            min_margin_frac: 0.05,
+            shortage_raise_threshold: 1.2,
+            shortage_raise_epsilon_frac: 0.02,
+            cash_liquidity_floor_k: 0.5,
+            rd_boost_on_expedite: 0.01,
+            rd_cut_on_cash_low: 0.01,
+        }
+    }
+}
+
+/// Decide monthly tactics: price delta and R&D adjustment.
+/// Returns (price_delta_frac, rd_boost_delta).
+pub fn decide_tactics(
+    metrics: &CompanyMetrics,
+    last_share: f32,
+    demand_supply_ratio: f32,
+    unit_cost: Decimal,
+    asp: Decimal,
+    cfg: &TacticsConfig,
+) -> (f32, f32) {
+    let mut price_df = 0.0f32;
+    let mut rd_boost = 0.0f32;
+
+    let share_drop = (last_share - metrics.share_12m).max(0.0);
+    if share_drop > cfg.share_drop_delta {
+        price_df -= cfg.price_epsilon_frac;
+    }
+    if demand_supply_ratio > cfg.shortage_raise_threshold {
+        price_df += cfg.shortage_raise_epsilon_frac;
+    }
+    // Enforce margin floor: if price cut would violate, clamp delta to floor
+    if price_df < 0.0 {
+        let min_price = unit_cost * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap_or(Decimal::ONE);
+        let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + price_df).unwrap_or(Decimal::ONE);
+        if new_price < min_price {
+            // Compute the maximal allowed negative delta
+            let max_negative = (min_price / asp).to_f32().unwrap_or(1.0) - 1.0;
+            price_df = max_negative.max(0.0);
+        }
+    }
+
+    // R&D policy: expedite if margin is healthy and share lags; cut if liquidity low.
+    if metrics.liquidity_k < cfg.cash_liquidity_floor_k {
+        rd_boost -= cfg.rd_cut_on_cash_low;
+    } else if share_drop > cfg.share_drop_delta {
+        rd_boost += cfg.rd_boost_on_expedite;
+    }
+
+    (price_df, rd_boost)
+}
+
+/// AI config with weights, planner, and tactics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    pub weights: ScoreWeights,
+    pub planner: PlannerConfig,
+    pub tactics: TacticsConfig,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self { weights: ScoreWeights::default(), planner: PlannerConfig::default(), tactics: TacticsConfig::default() }
+    }
+}
+
+/// Default YAML baked in from the assets directory.
+pub const AI_DEFAULTS_YAML: &str = include_str!("../../../assets/data/ai_defaults.yaml");
+
+impl AiConfig {
+    pub fn from_default_yaml() -> Result<AiConfig, serde_yaml::Error> {
+        serde_yaml::from_str(AI_DEFAULTS_YAML)
+    }
+}
+
+#[cfg(test)]
+mod tactics_tests {
+    use super::*;
+
+    #[test]
+    fn reduces_price_on_share_drop_with_floor() {
+        let cfg = TacticsConfig { share_drop_delta: 0.05, price_epsilon_frac: 0.1, min_margin_frac: 0.05, ..Default::default() };
+        let unit_cost = Decimal::new(200, 0);
+        let asp = Decimal::new(220, 0); // current margin ~9.09%
+        let m = CompanyMetrics { share_12m: 0.2, margin_ratio: 0.09, liquidity_k: 1.0, portfolio_div: 0.5 };
+        let (df, _rd) = decide_tactics(&m, 0.3, 1.0, unit_cost, asp, &cfg);
+        // requested cut 10% would violate min margin 5%
+        // floor should limit it to ~ (210/220 - 1) = -0.04545...
+        assert!(df <= 0.0);
+        let new_price = asp * rust_decimal::Decimal::from_f32_retain(1.0 + df).unwrap();
+        let min_price = unit_cost * rust_decimal::Decimal::from_f32_retain(1.0 + cfg.min_margin_frac).unwrap();
+        assert!(new_price >= min_price);
+    }
+
+    #[test]
+    fn increases_price_on_shortage() {
+        let cfg = TacticsConfig { shortage_raise_threshold: 1.2, shortage_raise_epsilon_frac: 0.03, ..Default::default() };
+        let unit_cost = Decimal::new(200, 0);
+        let asp = Decimal::new(300, 0);
+        let m = CompanyMetrics { share_12m: 0.3, margin_ratio: 0.33, liquidity_k: 1.0, portfolio_div: 0.5 };
+        let (df, _rd) = decide_tactics(&m, 0.3, 1.5, unit_cost, asp, &cfg);
+        assert!(df > 0.0);
+    }
+}
