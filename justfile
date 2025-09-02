@@ -32,6 +32,13 @@ sim-campaign WHICH="1990s":
 export-campaign path="telemetry/campaign_1990s.json":
     cargo run -p cli -- --campaign 1990s --export-campaign {{path}}
 
+# Защитник: не даёт запускать сборки с грязным деревом
+guard-clean:
+    git diff --quiet && git diff --cached --quiet || (echo "❌ Working tree not clean"; exit 1)
+
+# Композитная CI-цель
+ci: guard-clean lint test build
+
 # Запуск Bevy-фронта (игры)
 run-game:
     cargo run -p game-frontend
