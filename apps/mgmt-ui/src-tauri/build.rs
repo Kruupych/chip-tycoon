@@ -22,4 +22,3 @@ fn main() {
     println!("cargo:rustc-env=BUILD_DATE={}", date);
     println!("cargo:rerun-if-changed=.git/HEAD");
 }
-

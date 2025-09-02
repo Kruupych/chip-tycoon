@@ -1,15 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![deny(warnings)]
 
-use once_cell::sync::Lazy;
 use chrono::Datelike;
+use once_cell::sync::Lazy;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sim_core as core;
 use sim_runtime as runtime;
-use std::sync::{Arc, RwLock, Mutex};
-use schemars::JsonSchema;
+use std::sync::{Arc, Mutex, RwLock};
 
-fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(yaml_text: &str, schema_name: &str) -> Result<(), String> {
+fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
+    yaml_text: &str,
+    schema_name: &str,
+) -> Result<(), String> {
     // Build schema from type
     let schema = schemars::schema_for!(T);
     let schema_json = serde_json::to_value(&schema).map_err(|e| e.to_string())?;
@@ -20,7 +23,8 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(yaml_text: &str, sch
         let _ = std::fs::write(&out_path, s);
     }
     // Parse YAML as JSON value
-    let data_yaml: serde_yaml::Value = serde_yaml::from_str(yaml_text).map_err(|e| e.to_string())?;
+    let data_yaml: serde_yaml::Value =
+        serde_yaml::from_str(yaml_text).map_err(|e| e.to_string())?;
     let data_json = serde_json::to_value(data_yaml).map_err(|e| e.to_string())?;
     // Validate
     let compiled = jsonschema::JSONSchema::compile(&schema_json).map_err(|e| e.to_string())?;
@@ -29,7 +33,11 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(yaml_text: &str, sch
         let mut msgs: Vec<String> = Vec::new();
         for err in errors {
             let path = err.instance_path.to_string();
-            msgs.push(format!("{}: {}", if path.is_empty() { "/".into() } else { path }, err));
+            msgs.push(format!(
+                "{}: {}",
+                if path.is_empty() { "/".into() } else { path },
+                err
+            ));
         }
         let joined = msgs.join("; ");
         return Err(joined);
@@ -46,8 +54,7 @@ struct SimState {
     autosave: bool,
 }
 
-static SIM_STATE: Lazy<Arc<RwLock<Option<SimState>>>> =
-    Lazy::new(|| Arc::new(RwLock::new(None)));
+static SIM_STATE: Lazy<Arc<RwLock<Option<SimState>>>> = Lazy::new(|| Arc::new(RwLock::new(None)));
 static TICK_QUEUE: Lazy<Arc<Mutex<()>>> = Lazy::new(|| Arc::new(Mutex::new(())));
 
 #[derive(Serialize, Deserialize)]
@@ -65,7 +72,9 @@ async fn sim_tick(months: u32) -> Result<runtime::SimSnapshot, String> {
         // Check and set busy
         {
             let mut guard = state.write().unwrap();
-            let st = guard.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| "sim not initialized".to_string())?;
             if st.busy {
                 return Err("busy".to_string());
             }
@@ -100,7 +109,9 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
         // Check and set busy
         {
             let mut guard = state.write().unwrap();
-            let st = guard.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| "sim not initialized".to_string())?;
             if st.busy {
                 return Err("busy".to_string());
             }
@@ -115,7 +126,12 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
             let (s3, _t3) = runtime::run_months_in_place(&mut st.world, 1);
             // Autosave once per quarter if enabled
             if st.autosave {
-                let date = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
+                let date = st
+                    .world
+                    .resource::<runtime::DomainWorld>()
+                    .0
+                    .macro_state
+                    .date;
                 let name = format!("auto-{}{:02}", date.year(), date.month());
                 // Trigger background save
                 let dom_clone = st.dom.clone();
@@ -142,7 +158,9 @@ async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
 #[tauri::command]
 async fn sim_plan_quarter() -> Result<PlanSummary, String> {
     let guard = SIM_STATE.read().unwrap();
-    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     let world = &st.world;
     let dom = &st.dom;
     // Derive current KPIs for planner
@@ -178,18 +196,29 @@ async fn sim_plan_quarter() -> Result<PlanSummary, String> {
     let mut decisions = Vec::new();
     for d in plan.decisions.iter().take(5) {
         let s = match d.action {
-            sim_ai::PlanAction::AdjustPriceFrac(df) if df < 0.0 => format!("ASP{}%", (df * 100.0).round()),
-            sim_ai::PlanAction::AdjustPriceFrac(df) if df > 0.0 => format!("ASP+{}%", (df * 100.0).round()),
+            sim_ai::PlanAction::AdjustPriceFrac(df) if df < 0.0 => {
+                format!("ASP{}%", (df * 100.0).round())
+            }
+            sim_ai::PlanAction::AdjustPriceFrac(df) if df > 0.0 => {
+                format!("ASP+{}%", (df * 100.0).round())
+            }
             sim_ai::PlanAction::AdjustPriceFrac(_) => "ASP±0%".into(),
             sim_ai::PlanAction::RequestCapacity(u) => format!("Capacity+{}u/mo", u),
             sim_ai::PlanAction::AllocateRndBoost(_b) => "R&D boost".into(),
             sim_ai::PlanAction::ScheduleTapeout { expedite } => {
-                if expedite { "Tapeout (expedite)".into() } else { "Tapeout".into() }
+                if expedite {
+                    "Tapeout (expedite)".into()
+                } else {
+                    "Tapeout".into()
+                }
             }
         };
         decisions.push(s);
     }
-    Ok(PlanSummary { decisions, expected_score: plan.expected_score })
+    Ok(PlanSummary {
+        decisions,
+        expected_score: plan.expected_score,
+    })
 }
 
 #[derive(Deserialize, Debug)]
@@ -227,7 +256,11 @@ struct OverrideResp {
 // -------- DTOs for rich state --------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoCompany { name: String, cash_cents: i64, debt_cents: i64 }
+struct DtoCompany {
+    name: String,
+    cash_cents: i64,
+    debt_cents: i64,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DtoSegment {
@@ -242,7 +275,10 @@ struct DtoSegment {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoPricing { asp_cents: i64, unit_cost_cents: i64 }
+struct DtoPricing {
+    asp_cents: i64,
+    unit_cost_cents: i64,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DtoKpi {
@@ -278,7 +314,10 @@ struct DtoTapeoutReq {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoPipeline { queue: Vec<DtoTapeoutReq>, released: Vec<core::ProductSpec> }
+struct DtoPipeline {
+    queue: Vec<DtoTapeoutReq>,
+    released: Vec<core::ProductSpec>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DtoConfig {
@@ -311,18 +350,41 @@ struct SimListsDto {
 // -------- Campaign DTOs --------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoGoal { kind: String, desc: String, progress: f32, deadline: String, done: bool }
+struct DtoGoal {
+    kind: String,
+    desc: String,
+    progress: f32,
+    deadline: String,
+    done: bool,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoCampaign { status: String, goals: Vec<DtoGoal>, start: String, end: String, difficulty: Option<String> }
+struct DtoCampaign {
+    status: String,
+    goals: Vec<DtoGoal>,
+    start: String,
+    end: String,
+    difficulty: Option<String>,
+}
 
 // -------- Tutorial DTOs --------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoTutStep { id: String, desc: String, hint: String, nav_page: String, nav_label: String, done: bool }
+struct DtoTutStep {
+    id: String,
+    desc: String,
+    hint: String,
+    nav_page: String,
+    nav_label: String,
+    done: bool,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DtoTutorial { active: bool, current_step: u8, steps: Vec<DtoTutStep> }
+struct DtoTutorial {
+    active: bool,
+    current_step: u8,
+    steps: Vec<DtoTutStep>,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct TutorialCfg {
@@ -333,10 +395,19 @@ struct TutorialCfg {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct TutorialStepCfg { id: String, desc: String, hint: String, nav: TutorialNavCfg }
+struct TutorialStepCfg {
+    id: String,
+    desc: String,
+    hint: String,
+    nav: TutorialNavCfg,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct TutorialNavCfg { page: String, label: String, button: String }
+struct TutorialNavCfg {
+    page: String,
+    label: String,
+    button: String,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct CampaignScenario {
@@ -351,35 +422,93 @@ struct CampaignScenario {
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(tag = "type")]
-enum YamlGoal { #[serde(rename="reach_share")] ReachShare { segment: String, min_share: f32, deadline: String }, #[serde(rename="launch_node")] LaunchNode { node: String, deadline: String }, #[serde(rename="profit_target")] ProfitTarget { profit_cents: i64, deadline: String }, #[serde(rename="survive_event")] SurviveEvent { event_id: String, deadline: String } }
+enum YamlGoal {
+    #[serde(rename = "reach_share")]
+    ReachShare {
+        segment: String,
+        min_share: f32,
+        deadline: String,
+    },
+    #[serde(rename = "launch_node")]
+    LaunchNode { node: String, deadline: String },
+    #[serde(rename = "profit_target")]
+    ProfitTarget { profit_cents: i64, deadline: String },
+    #[serde(rename = "survive_event")]
+    SurviveEvent { event_id: String, deadline: String },
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(tag = "type")]
-enum YamlFail { #[serde(rename="cash_below")] CashBelow { threshold_cents: i64 }, #[serde(rename="share_below")] ShareBelow { segment: String, min_share: f32, deadline: String } }
+enum YamlFail {
+    #[serde(rename = "cash_below")]
+    CashBelow { threshold_cents: i64 },
+    #[serde(rename = "share_below")]
+    ShareBelow {
+        segment: String,
+        min_share: f32,
+        deadline: String,
+    },
+}
 
 // -------- Asset schema DTOs --------
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct MarketsRoot { segments: Vec<MarketSegSchema> }
+struct MarketsRoot {
+    segments: Vec<MarketSegSchema>,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(untagged)]
-enum U64OrStr { U(u64), S(String) }
+enum U64OrStr {
+    U(u64),
+    S(String),
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(untagged)]
-enum I64OrStrV { I(i64), S(String) }
+enum I64OrStrV {
+    I(i64),
+    S(String),
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct MarketStepSchema { start: String, months: u32, #[serde(default)] base_demand_pct: Option<f32>, #[serde(default)] ref_price_pct: Option<f32>, #[serde(default)] elasticity_delta: Option<f32> }
+struct MarketStepSchema {
+    start: String,
+    months: u32,
+    #[serde(default)]
+    base_demand_pct: Option<f32>,
+    #[serde(default)]
+    ref_price_pct: Option<f32>,
+    #[serde(default)]
+    elasticity_delta: Option<f32>,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct MarketSegSchema { id: String, name: String, base_demand_units_1990: U64OrStr, base_asp_cents_1990: I64OrStrV, elasticity: f32, annual_growth_pct: f32, #[serde(default)] step_events: Vec<MarketStepSchema> }
+struct MarketSegSchema {
+    id: String,
+    name: String,
+    base_demand_units_1990: U64OrStr,
+    base_asp_cents_1990: I64OrStrV,
+    elasticity: f32,
+    annual_growth_pct: f32,
+    #[serde(default)]
+    step_events: Vec<MarketStepSchema>,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct TechRoot { nodes: Vec<TechNodeSchema> }
+struct TechRoot {
+    nodes: Vec<TechNodeSchema>,
+}
 
 #[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
-struct TechNodeSchema { id: String, year_available: i32, wafer_cost_cents: i64, yield_baseline: f32, mask_set_cost_cents: i64, #[serde(default)] deps: Option<Vec<String>> }
+struct TechNodeSchema {
+    id: String,
+    year_available: i32,
+    wafer_cost_cents: i64,
+    yield_baseline: f32,
+    mask_set_cost_cents: i64,
+    #[serde(default)]
+    deps: Option<Vec<String>>,
+}
 
 fn build_sim_state_dto(st: &SimState) -> SimStateDto {
     let world = &st.world;
@@ -461,12 +590,21 @@ fn build_sim_state_dto(st: &SimState) -> SimStateDto {
         month_index: stats.months_run,
         companies,
         segments,
-        pricing: DtoPricing { asp_cents, unit_cost_cents },
+        pricing: DtoPricing {
+            asp_cents,
+            unit_cost_cents,
+        },
         kpi,
         contracts,
         pipeline: DtoPipeline { queue, released },
-        ai_plan: PlanSummary { decisions: vec!["n/a".into()], expected_score: 0.0 },
-        config: DtoConfig { finance: *world.resource::<runtime::FinanceConfig>(), product_cost: ai_cfg.product_cost },
+        ai_plan: PlanSummary {
+            decisions: vec!["n/a".into()],
+            expected_score: 0.0,
+        },
+        config: DtoConfig {
+            finance: *world.resource::<runtime::FinanceConfig>(),
+            product_cost: ai_cfg.product_cost,
+        },
         campaign,
     }
 }
@@ -476,63 +614,147 @@ fn build_campaign_dto(st: &SimState, sc: &CampaignScenario) -> DtoCampaign {
     let stats = world.resource::<runtime::Stats>();
     let mut goals: Vec<DtoGoal> = Vec::new();
     // Prefer runtime campaign state if present
-    if let (Some(state), Some(cfg)) = (world.get_resource::<runtime::CampaignStateRes>(), world.get_resource::<runtime::CampaignScenarioRes>()) {
+    if let (Some(state), Some(cfg)) = (
+        world.get_resource::<runtime::CampaignStateRes>(),
+        world.get_resource::<runtime::CampaignScenarioRes>(),
+    ) {
         for (i, g) in cfg.goals.iter().enumerate() {
             let (desc, progress) = match g {
-                runtime::GoalKind::ReachShare { segment: _s, min_share, deadline: _ } => (format!("Reach share ≥ {}%", (min_share*100.0).round()), (stats.market_share / (*min_share + 1e-6)).clamp(0.0, 1.0)),
+                runtime::GoalKind::ReachShare {
+                    segment: _s,
+                    min_share,
+                    deadline: _,
+                } => (
+                    format!("Reach share ≥ {}%", (min_share * 100.0).round()),
+                    (stats.market_share / (*min_share + 1e-6)).clamp(0.0, 1.0),
+                ),
                 runtime::GoalKind::LaunchNode { node, deadline: _ } => {
                     let pipe = world.resource::<runtime::Pipeline>();
                     let done = pipe.0.released.iter().any(|p| p.tech_node.0 == *node);
-                    (format!("Launch node {}", node), if done {1.0} else {0.0})
+                    (
+                        format!("Launch node {}", node),
+                        if done { 1.0 } else { 0.0 },
+                    )
                 }
-                runtime::GoalKind::ProfitTarget { profit_cents, deadline: _ } => {
+                runtime::GoalKind::ProfitTarget {
+                    profit_cents,
+                    deadline: _,
+                } => {
                     let prof = persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0);
-                    (format!("Cumulative profit ≥ ${}", (*profit_cents as f64)/100.0), (prof as f32 / (*profit_cents as f32)).clamp(0.0, 1.0))
+                    (
+                        format!("Cumulative profit ≥ ${}", (*profit_cents as f64) / 100.0),
+                        (prof as f32 / (*profit_cents as f32)).clamp(0.0, 1.0),
+                    )
                 }
-                runtime::GoalKind::SurviveEvent { event_id, deadline: _ } => (format!("Survive {}", event_id), 0.0),
+                runtime::GoalKind::SurviveEvent {
+                    event_id,
+                    deadline: _,
+                } => (format!("Survive {}", event_id), 0.0),
             };
-            let st = state.goal_status.get(i).cloned().unwrap_or(runtime::GoalStatus::Pending);
-            goals.push(DtoGoal { kind: "goal".into(), desc, progress, deadline: "".into(), done: matches!(st, runtime::GoalStatus::Done) });
+            let st = state
+                .goal_status
+                .get(i)
+                .cloned()
+                .unwrap_or(runtime::GoalStatus::Pending);
+            goals.push(DtoGoal {
+                kind: "goal".into(),
+                desc,
+                progress,
+                deadline: "".into(),
+                done: matches!(st, runtime::GoalStatus::Done),
+            });
         }
-        let status = match state.outcome { runtime::CampaignOutcome::InProgress => "InProgress", runtime::CampaignOutcome::Success => "Success", runtime::CampaignOutcome::Failed => "Failed" }.to_string();
-        return DtoCampaign { status, goals, start: sc.start_date.clone(), end: sc.end_date.clone(), difficulty: cfg.difficulty.clone() };
+        let status = match state.outcome {
+            runtime::CampaignOutcome::InProgress => "InProgress",
+            runtime::CampaignOutcome::Success => "Success",
+            runtime::CampaignOutcome::Failed => "Failed",
+        }
+        .to_string();
+        return DtoCampaign {
+            status,
+            goals,
+            start: sc.start_date.clone(),
+            end: sc.end_date.clone(),
+            difficulty: cfg.difficulty.clone(),
+        };
     }
     // Fallback to simple computation from YAML
     for g in &sc.goals {
         match g {
-            YamlGoal::ReachShare { segment: _seg, min_share, deadline } => {
+            YamlGoal::ReachShare {
+                segment: _seg,
+                min_share,
+                deadline,
+            } => {
                 let p = (stats.market_share / (*min_share + 1e-6)).clamp(0.0, 1.0);
-                goals.push(DtoGoal { kind: "reach_share".into(), desc: format!("Reach share ≥ {}%", (min_share*100.0).round()), progress: p, deadline: deadline.clone(), done: p >= 1.0 });
+                goals.push(DtoGoal {
+                    kind: "reach_share".into(),
+                    desc: format!("Reach share ≥ {}%", (min_share * 100.0).round()),
+                    progress: p,
+                    deadline: deadline.clone(),
+                    done: p >= 1.0,
+                });
             }
             YamlGoal::LaunchNode { node, deadline } => {
                 let pipe = world.resource::<runtime::Pipeline>();
                 let done = pipe.0.released.iter().any(|p| p.tech_node.0 == *node);
-                goals.push(DtoGoal { kind: "launch_node".into(), desc: format!("Launch node {}", node), progress: if done {1.0} else {0.0}, deadline: deadline.clone(), done });
+                goals.push(DtoGoal {
+                    kind: "launch_node".into(),
+                    desc: format!("Launch node {}", node),
+                    progress: if done { 1.0 } else { 0.0 },
+                    deadline: deadline.clone(),
+                    done,
+                });
             }
-            YamlGoal::ProfitTarget { profit_cents, deadline } => {
+            YamlGoal::ProfitTarget {
+                profit_cents,
+                deadline,
+            } => {
                 let prof = persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0);
                 let p = (prof as f32 / (*profit_cents as f32)).clamp(0.0, 1.0);
-                goals.push(DtoGoal { kind: "profit_target".into(), desc: format!("Cumulative profit ≥ ${}", (*profit_cents as f64)/100.0), progress: p, deadline: deadline.clone(), done: p >= 1.0 });
+                goals.push(DtoGoal {
+                    kind: "profit_target".into(),
+                    desc: format!("Cumulative profit ≥ ${}", (*profit_cents as f64) / 100.0),
+                    progress: p,
+                    deadline: deadline.clone(),
+                    done: p >= 1.0,
+                });
             }
             YamlGoal::SurviveEvent { event_id, deadline } => {
-                goals.push(DtoGoal { kind: "survive_event".into(), desc: format!("Survive {}", event_id), progress: 0.0, deadline: deadline.clone(), done: false });
+                goals.push(DtoGoal {
+                    kind: "survive_event".into(),
+                    desc: format!("Survive {}", event_id),
+                    progress: 0.0,
+                    deadline: deadline.clone(),
+                    done: false,
+                });
             }
         }
     }
-    DtoCampaign { status: "InProgress".into(), goals, start: sc.start_date.clone(), end: sc.end_date.clone(), difficulty: None }
+    DtoCampaign {
+        status: "InProgress".into(),
+        goals,
+        start: sc.start_date.clone(),
+        end: sc.end_date.clone(),
+        difficulty: None,
+    }
 }
 
 #[tauri::command]
 fn sim_state() -> Result<SimStateDto, String> {
     let guard = SIM_STATE.read().unwrap();
-    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     Ok(build_sim_state_dto(st))
 }
 
 #[tauri::command]
 fn sim_lists() -> Result<SimListsDto, String> {
     let guard = SIM_STATE.read().unwrap();
-    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     let tech_nodes = st
         .dom
         .tech_tree
@@ -547,99 +769,206 @@ fn sim_lists() -> Result<SimListsDto, String> {
         .map(|c| c.foundry_id.clone())
         .collect::<Vec<_>>();
     let segments = st.dom.segments.iter().map(|s| s.name.clone()).collect();
-    Ok(SimListsDto { tech_nodes, foundries, segments })
+    Ok(SimListsDto {
+        tech_nodes,
+        foundries,
+        segments,
+    })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct ActiveModDto { id: String, kind: String, target: String, start: String, end: String }
+struct ActiveModDto {
+    id: String,
+    kind: String,
+    target: String,
+    start: String,
+    end: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct BalanceInfoDto { segments: Vec<DtoSegment>, active_mods: Vec<ActiveModDto> }
+struct BalanceInfoDto {
+    segments: Vec<DtoSegment>,
+    active_mods: Vec<ActiveModDto>,
+}
 
 #[tauri::command]
 fn sim_balance_info() -> Result<BalanceInfoDto, String> {
     let guard = SIM_STATE.read().unwrap();
-    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     let dto = build_sim_state_dto(st);
     // Build active mods from runtime resources: tech via ModEngine, market via MarketModEffects
     let world = &st.world;
     let mut mods_list: Vec<ActiveModDto> = Vec::new();
     if let Some(me) = world.get_non_send_resource::<runtime::ModEngineRes>() {
         for (id, start, end) in me.engine.active_effects_summary() {
-            mods_list.push(ActiveModDto { id, kind: "tech".into(), target: "tech_tree".into(), start: start.to_string(), end: end.to_string() });
+            mods_list.push(ActiveModDto {
+                id,
+                kind: "tech".into(),
+                target: "tech_tree".into(),
+                start: start.to_string(),
+                end: end.to_string(),
+            });
         }
     }
     if let Some(mm) = world.get_resource::<runtime::MarketModEffects>() {
         for e in &mm.0 {
-            mods_list.push(ActiveModDto { id: e.id.clone(), kind: "market".into(), target: e.segment_id.clone(), start: e.start.to_string(), end: e.end.to_string() });
+            mods_list.push(ActiveModDto {
+                id: e.id.clone(),
+                kind: "market".into(),
+                target: e.segment_id.clone(),
+                start: e.start.to_string(),
+                end: e.end.to_string(),
+            });
         }
     }
-    Ok(BalanceInfoDto { segments: dto.segments, active_mods: mods_list })
+    Ok(BalanceInfoDto {
+        segments: dto.segments,
+        active_mods: mods_list,
+    })
 }
 
 #[tauri::command]
 fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     // Resolve scenario path
     let id = which.unwrap_or_else(|| "1990s".to_string());
-    let path = match id.as_str() { "1990s" => "assets/scenarios/campaign_1990s.yaml".to_string(), _ => id };
+    let path = match id.as_str() {
+        "1990s" => "assets/scenarios/campaign_1990s.yaml".to_string(),
+        _ => id,
+    };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     // Validate scenario YAML
-    validate_yaml::<CampaignScenario>(&text, "campaign").map_err(|e| format!("campaign.yaml invalid: {e}"))?;
+    validate_yaml::<CampaignScenario>(&text, "campaign")
+        .map_err(|e| format!("campaign.yaml invalid: {e}"))?;
     let sc: CampaignScenario = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
     // Build new dom
-    let start = chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    let start =
+        chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     // Validate and load tech + markets assets
-    let tech_text = std::fs::read_to_string("assets/data/tech_era_1990s.yaml").map_err(|e| e.to_string())?;
-    validate_yaml::<TechRoot>(&tech_text, "tech_era").map_err(|e| format!("tech_era_1990s.yaml invalid: {e}"))?;
+    let tech_text =
+        std::fs::read_to_string("assets/data/tech_era_1990s.yaml").map_err(|e| e.to_string())?;
+    validate_yaml::<TechRoot>(&tech_text, "tech_era")
+        .map_err(|e| format!("tech_era_1990s.yaml invalid: {e}"))?;
     let tech_nodes = load_tech_nodes("assets/data/tech_era_1990s.yaml");
-    let markets_text = std::fs::read_to_string("assets/data/markets_1990s.yaml").map_err(|e| e.to_string())?;
-    validate_yaml::<MarketsRoot>(&markets_text, "markets").map_err(|e| format!("markets_1990s.yaml invalid: {e}"))?;
-    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml").unwrap_or_default();
+    let markets_text =
+        std::fs::read_to_string("assets/data/markets_1990s.yaml").map_err(|e| e.to_string())?;
+    validate_yaml::<MarketsRoot>(&markets_text, "markets")
+        .map_err(|e| format!("markets_1990s.yaml invalid: {e}"))?;
+    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml")
+        .unwrap_or_default();
     let segments: Vec<core::MarketSegment> = markets
         .segments
         .iter()
-        .map(|s| core::MarketSegment { name: s.name.clone(), base_demand_units: s.base_demand_units_1990, price_elasticity: s.elasticity })
+        .map(|s| core::MarketSegment {
+            name: s.name.clone(),
+            base_demand_units: s.base_demand_units_1990,
+            price_elasticity: s.elasticity,
+        })
         .collect();
     let dom = core::World {
-        macro_state: core::MacroState { date: start, inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+        macro_state: core::MacroState {
+            date: start,
+            inflation_annual: 0.02,
+            interest_rate: 0.05,
+            fx_usd_index: 100.0,
+        },
         tech_tree: tech_nodes,
-        companies: vec![core::Company { name: "Player".into(), cash_usd: persistence::cents_i64_to_decimal(sc.player_start_cash_cents), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
+        companies: vec![core::Company {
+            name: "Player".into(),
+            cash_usd: persistence::cents_i64_to_decimal(sc.player_start_cash_cents),
+            debt_usd: rust_decimal::Decimal::ZERO,
+            ip_portfolio: vec![],
+        }],
         segments,
     };
-    let mut world = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
+    let mut world = runtime::init_world(
+        dom.clone(),
+        core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        },
+    );
     world.insert_resource(markets);
     // Load campaign events YAML
-    let ev_path = if sc.events_yaml.starts_with("/") || sc.events_yaml.starts_with(".") { sc.events_yaml.clone() } else { format!("assets/events/{}", sc.events_yaml) };
+    let ev_path = if sc.events_yaml.starts_with("/") || sc.events_yaml.starts_with(".") {
+        sc.events_yaml.clone()
+    } else {
+        format!("assets/events/{}", sc.events_yaml)
+    };
     let ev_cfg = runtime::load_market_events_yaml(&ev_path);
     world.insert_resource(ev_cfg);
     // Inject campaign scenario into runtime for goal tracking
-    let mut cfg = runtime::CampaignScenarioRes { start, end, difficulty: None, goals: vec![], fails: vec![] };
+    let mut cfg = runtime::CampaignScenarioRes {
+        start,
+        end,
+        difficulty: None,
+        goals: vec![],
+        fails: vec![],
+    };
     for g in &sc.goals {
         match g {
-            YamlGoal::ReachShare { segment, min_share, deadline } => {
-                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").map_err(|e| e.to_string())?;
-                cfg.goals.push(runtime::GoalKind::ReachShare { segment: segment.clone(), min_share: *min_share, deadline: d });
+            YamlGoal::ReachShare {
+                segment,
+                min_share,
+                deadline,
+            } => {
+                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                cfg.goals.push(runtime::GoalKind::ReachShare {
+                    segment: segment.clone(),
+                    min_share: *min_share,
+                    deadline: d,
+                });
             }
             YamlGoal::LaunchNode { node, deadline } => {
-                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").map_err(|e| e.to_string())?;
-                cfg.goals.push(runtime::GoalKind::LaunchNode { node: node.clone(), deadline: d });
+                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                cfg.goals.push(runtime::GoalKind::LaunchNode {
+                    node: node.clone(),
+                    deadline: d,
+                });
             }
-            YamlGoal::ProfitTarget { profit_cents, deadline } => {
-                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").map_err(|e| e.to_string())?;
-                cfg.goals.push(runtime::GoalKind::ProfitTarget { profit_cents: *profit_cents, deadline: d });
+            YamlGoal::ProfitTarget {
+                profit_cents,
+                deadline,
+            } => {
+                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                cfg.goals.push(runtime::GoalKind::ProfitTarget {
+                    profit_cents: *profit_cents,
+                    deadline: d,
+                });
             }
             YamlGoal::SurviveEvent { event_id, deadline } => {
-                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").map_err(|e| e.to_string())?;
-                cfg.goals.push(runtime::GoalKind::SurviveEvent { event_id: event_id.clone(), deadline: d });
+                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                cfg.goals.push(runtime::GoalKind::SurviveEvent {
+                    event_id: event_id.clone(),
+                    deadline: d,
+                });
             }
         }
     }
     for f in &sc.fail_conditions {
         match f {
-            YamlFail::CashBelow { threshold_cents } => cfg.fails.push(runtime::FailCondKind::CashBelow { threshold_cents: *threshold_cents }),
-            YamlFail::ShareBelow { segment, min_share, deadline } => {
-                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").map_err(|e| e.to_string())?;
-                cfg.fails.push(runtime::FailCondKind::ShareBelow { segment: segment.clone(), min_share: *min_share, deadline: d });
+            YamlFail::CashBelow { threshold_cents } => {
+                cfg.fails.push(runtime::FailCondKind::CashBelow {
+                    threshold_cents: *threshold_cents,
+                })
+            }
+            YamlFail::ShareBelow {
+                segment,
+                min_share,
+                deadline,
+            } => {
+                let d = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                cfg.fails.push(runtime::FailCondKind::ShareBelow {
+                    segment: segment.clone(),
+                    min_share: *min_share,
+                    deadline: d,
+                });
             }
         }
     }
@@ -647,7 +976,9 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     world.insert_resource(runtime::CampaignStateRes::default());
     // Optional tutorial section
     let tutorial_cfg: Option<TutorialCfg> = match serde_yaml::from_str::<serde_yaml::Value>(&text) {
-        Ok(v) => v.get("tutorial").and_then(|t| serde_yaml::from_value::<TutorialCfg>(t.clone()).ok()),
+        Ok(v) => v
+            .get("tutorial")
+            .and_then(|t| serde_yaml::from_value::<TutorialCfg>(t.clone()).ok()),
         Err(_) => None,
     };
     if let Some(tcfg) = &tutorial_cfg {
@@ -656,7 +987,13 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     // Replace global state
     {
         let mut guard = SIM_STATE.write().unwrap();
-        *guard = Some(SimState { world, dom, busy: false, scenario: Some(sc), tutorial: tutorial_cfg });
+        *guard = Some(SimState {
+            world,
+            dom,
+            busy: false,
+            scenario: Some(sc),
+            tutorial: tutorial_cfg,
+        });
     }
     // Return the new state
     let guard = SIM_STATE.read().unwrap();
@@ -669,7 +1006,9 @@ fn sim_override(ovr: OverrideReq) -> Result<OverrideResp, String> {
     let mut resp = OverrideResp::default();
     let state = SIM_STATE.clone();
     let mut guard = state.write().unwrap();
-    let st = guard.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard
+        .as_mut()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     let world = &mut st.world;
     if let Some(df) = ovr.price_delta_frac {
         let asp = runtime::apply_price_delta(world, df);
@@ -706,35 +1045,102 @@ fn main() {
     // Init a 1990s world on startup from assets
     let date0 = chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
     let tech_nodes = load_tech_nodes("assets/data/tech_era_1990s.yaml");
-    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml").unwrap_or_default();
+    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml")
+        .unwrap_or_default();
     let segments: Vec<core::MarketSegment> = markets
         .segments
         .iter()
-        .map(|s| core::MarketSegment { name: s.name.clone(), base_demand_units: s.base_demand_units_1990, price_elasticity: s.elasticity })
+        .map(|s| core::MarketSegment {
+            name: s.name.clone(),
+            base_demand_units: s.base_demand_units_1990,
+            price_elasticity: s.elasticity,
+        })
         .collect();
     let dom = core::World {
-        macro_state: core::MacroState { date: date0, inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+        macro_state: core::MacroState {
+            date: date0,
+            inflation_annual: 0.02,
+            interest_rate: 0.05,
+            fx_usd_index: 100.0,
+        },
         tech_tree: tech_nodes,
-        companies: vec![core::Company { name: "A".into(), cash_usd: rust_decimal::Decimal::new(5_000_000, 0), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
+        companies: vec![core::Company {
+            name: "A".into(),
+            cash_usd: rust_decimal::Decimal::new(5_000_000, 0),
+            debt_usd: rust_decimal::Decimal::ZERO,
+            ip_portfolio: vec![],
+        }],
         segments,
     };
     // Validate
     let _ = core::validate_world(&dom).map_err(|e| e.to_string());
-    let mut ecs = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
+    let mut ecs = runtime::init_world(
+        dom.clone(),
+        core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        },
+    );
     ecs.insert_resource(markets);
     // Default campaign events for 1990s
-    ecs.insert_resource(runtime::load_market_events_yaml("assets/events/campaign_1990s.yaml"));
-    *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None, tutorial: None, autosave: true });
+    ecs.insert_resource(runtime::load_market_events_yaml(
+        "assets/events/campaign_1990s.yaml",
+    ));
+    *SIM_STATE.write().unwrap() = Some(SimState {
+        world: ecs,
+        dom,
+        busy: false,
+        scenario: None,
+        tutorial: None,
+        autosave: true,
+    });
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_build_info])
-        .invoke_handler(tauri::generate_handler![sim_tick, sim_tick_quarter, sim_plan_quarter, sim_override, sim_state, sim_lists, sim_campaign_reset, sim_balance_info, sim_campaign_set_difficulty, sim_tutorial_state, sim_save, sim_list_saves, sim_load, sim_set_autosave, sim_export_campaign, sim_build_info])
+        .invoke_handler(tauri::generate_handler![
+            sim_tick,
+            sim_tick_quarter,
+            sim_plan_quarter,
+            sim_override,
+            sim_state,
+            sim_lists,
+            sim_campaign_reset,
+            sim_balance_info,
+            sim_campaign_set_difficulty,
+            sim_tutorial_state,
+            sim_save,
+            sim_list_saves,
+            sim_load,
+            sim_set_autosave,
+            sim_build_info
+        ])
+        .invoke_handler(tauri::generate_handler![
+            sim_tick,
+            sim_tick_quarter,
+            sim_plan_quarter,
+            sim_override,
+            sim_state,
+            sim_lists,
+            sim_campaign_reset,
+            sim_balance_info,
+            sim_campaign_set_difficulty,
+            sim_tutorial_state,
+            sim_save,
+            sim_list_saves,
+            sim_load,
+            sim_set_autosave,
+            sim_export_campaign,
+            sim_build_info
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct BuildInfo { version: String, git_sha: String, build_date: String }
+struct BuildInfo {
+    version: String,
+    git_sha: String,
+    build_date: String,
+}
 
 #[tauri::command]
 fn sim_build_info() -> Result<BuildInfo, String> {
@@ -748,20 +1154,35 @@ fn sim_build_info() -> Result<BuildInfo, String> {
 #[tauri::command]
 fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
     let mut g = SIM_STATE.write().unwrap();
-    let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = g
+        .as_mut()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     if let Some(cfg) = st.world.get_resource_mut::<runtime::CampaignScenarioRes>() {
         cfg.difficulty = Some(level.clone());
     }
     // Load presets
     #[derive(serde::Deserialize, JsonSchema)]
-    struct Level { cash_multiplier: f32, min_margin_frac: f32, price_epsilon_frac: f32, take_or_pay_frac: f32, annual_growth_pct_multiplier: f32, event_severity_multiplier: f32 }
+    struct Level {
+        cash_multiplier: f32,
+        min_margin_frac: f32,
+        price_epsilon_frac: f32,
+        take_or_pay_frac: f32,
+        annual_growth_pct_multiplier: f32,
+        event_severity_multiplier: f32,
+    }
     #[derive(serde::Deserialize, JsonSchema)]
-    struct Root { levels: std::collections::HashMap<String, Level> }
-    let text = std::fs::read_to_string("assets/scenarios/difficulty.yaml").map_err(|e| e.to_string())?;
+    struct Root {
+        levels: std::collections::HashMap<String, Level>,
+    }
+    let text =
+        std::fs::read_to_string("assets/scenarios/difficulty.yaml").map_err(|e| e.to_string())?;
     // Validate difficulty before applying
-    validate_yaml::<Root>(&text, "difficulty").map_err(|e| format!("difficulty.yaml invalid: {e}"))?;
+    validate_yaml::<Root>(&text, "difficulty")
+        .map_err(|e| format!("difficulty.yaml invalid: {e}"))?;
     let root: Root = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
-    let Some(preset) = root.levels.get(&level) else { return Err("unknown difficulty".into()) };
+    let Some(preset) = root.levels.get(&level) else {
+        return Err("unknown difficulty".into());
+    };
     // Apply to AI config
     {
         let mut ai = st.world.resource_mut::<runtime::AiConfig>();
@@ -786,8 +1207,16 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
             let mult = preset.event_severity_multiplier as f64;
             for v in &mut ev.events {
                 if let Some(me) = v.get_mut("market_effect") {
-                    if let Some(b) = me.get_mut("base_demand_pct") { if let Some(x) = b.as_f64() { *b = serde_yaml::Value::from(x * mult); } }
-                    if let Some(e) = me.get_mut("elasticity_delta") { if let Some(x) = e.as_f64() { *e = serde_yaml::Value::from(x * mult); } }
+                    if let Some(b) = me.get_mut("base_demand_pct") {
+                        if let Some(x) = b.as_f64() {
+                            *b = serde_yaml::Value::from(x * mult);
+                        }
+                    }
+                    if let Some(e) = me.get_mut("elasticity_delta") {
+                        if let Some(x) = e.as_f64() {
+                            *e = serde_yaml::Value::from(x * mult);
+                        }
+                    }
                 }
             }
         }
@@ -795,7 +1224,8 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
     // Adjust player cash multiplicatively
     if let Some(c) = st.dom.companies.get_mut(0) {
         let cash = c.cash_usd;
-        let m = rust_decimal::Decimal::from_f32_retain(preset.cash_multiplier as f32).unwrap_or(rust_decimal::Decimal::ONE);
+        let m = rust_decimal::Decimal::from_f32_retain(preset.cash_multiplier as f32)
+            .unwrap_or(rust_decimal::Decimal::ONE);
         c.cash_usd = cash * m;
     }
     Ok(())
@@ -803,9 +1233,18 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
 
 fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
     #[derive(serde::Deserialize)]
-    struct YNode { id: String, year_available: i32, wafer_cost_cents: i64, yield_baseline: f32, mask_set_cost_cents: i64, deps: Option<Vec<String>> }
+    struct YNode {
+        id: String,
+        year_available: i32,
+        wafer_cost_cents: i64,
+        yield_baseline: f32,
+        mask_set_cost_cents: i64,
+        deps: Option<Vec<String>>,
+    }
     #[derive(serde::Deserialize)]
-    struct Root { nodes: Vec<YNode> }
+    struct Root {
+        nodes: Vec<YNode>,
+    }
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let root: Root = serde_yaml::from_str(&text).unwrap_or(Root { nodes: vec![] });
     root.nodes
@@ -816,7 +1255,8 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
             density_mtr_per_mm2: rust_decimal::Decimal::new(1, 0),
             freq_ghz_baseline: rust_decimal::Decimal::new(1, 0),
             leakage_index: rust_decimal::Decimal::new(1, 0),
-            yield_baseline: rust_decimal::Decimal::from_f32_retain(n.yield_baseline).unwrap_or(rust_decimal::Decimal::new(9, 1)),
+            yield_baseline: rust_decimal::Decimal::from_f32_retain(n.yield_baseline)
+                .unwrap_or(rust_decimal::Decimal::new(9, 1)),
             wafer_cost_usd: persistence::cents_i64_to_decimal(n.wafer_cost_cents),
             mask_set_cost_usd: persistence::cents_i64_to_decimal(n.mask_set_cost_cents),
             dependencies: n
@@ -830,11 +1270,19 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct SaveInfo { id: i64, name: String, status: String, created_at: String, progress: u32 }
+struct SaveInfo {
+    id: i64,
+    name: String,
+    status: String,
+    created_at: String,
+    progress: u32,
+}
 
 async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
+    let pool = p::init_db(p::default_sqlite_url())
+        .await
+        .map_err(|e| e.to_string())?;
     // Autosave flow: mark in_progress first
     let is_auto = name.starts_with("auto-");
     let sid = if is_auto {
@@ -842,7 +1290,9 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
             .await
             .map_err(|e| e.to_string())?
     } else {
-        p::create_save(&pool, &name, None).await.map_err(|e| e.to_string())?
+        p::create_save(&pool, &name, None)
+            .await
+            .map_err(|e| e.to_string())?
     };
     // Snapshot domain world
     let month_index = world.resource::<runtime::Stats>().months_run as i64;
@@ -853,22 +1303,50 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
     // Persist contracts
     let book = world.resource::<runtime::CapacityBook>();
     for c in &book.contracts {
-        let row = p::ContractRow { foundry_id: c.foundry_id.clone(), wafers_per_month: c.wafers_per_month as i64, price_per_wafer_cents: c.price_per_wafer_cents, take_or_pay_frac: c.take_or_pay_frac, billing_cents_per_wafer: c.billing_cents_per_wafer, billing_model: c.billing_model.into(), lead_time_months: c.lead_time_months as i64, start: c.start.to_string(), end: c.end.to_string() };
-        let _ = p::insert_contract(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+        let row = p::ContractRow {
+            foundry_id: c.foundry_id.clone(),
+            wafers_per_month: c.wafers_per_month as i64,
+            price_per_wafer_cents: c.price_per_wafer_cents,
+            take_or_pay_frac: c.take_or_pay_frac,
+            billing_cents_per_wafer: c.billing_cents_per_wafer,
+            billing_model: c.billing_model.into(),
+            lead_time_months: c.lead_time_months as i64,
+            start: c.start.to_string(),
+            end: c.end.to_string(),
+        };
+        let _ = p::insert_contract(&pool, sid, &row)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     // Persist tapeout queue and released
     let pipe = world.resource::<runtime::Pipeline>();
     for t in &pipe.0.queue {
-        let row = p::TapeoutRow { product_json: serde_json::to_string(&t.product).map_err(|e| e.to_string())?, tech_node: t.tech_node.0.clone(), start: t.start.to_string(), ready: t.ready.to_string(), expedite: if t.expedite {1} else {0}, expedite_cost_cents: t.expedite_cost_cents };
-        let _ = p::insert_tapeout_request(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+        let row = p::TapeoutRow {
+            product_json: serde_json::to_string(&t.product).map_err(|e| e.to_string())?,
+            tech_node: t.tech_node.0.clone(),
+            start: t.start.to_string(),
+            ready: t.ready.to_string(),
+            expedite: if t.expedite { 1 } else { 0 },
+            expedite_cost_cents: t.expedite_cost_cents,
+        };
+        let _ = p::insert_tapeout_request(&pool, sid, &row)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     for r in &pipe.0.released {
-        let row = p::ReleasedRow { product_json: serde_json::to_string(r).map_err(|e| e.to_string())?, released_at: dom.macro_state.date.to_string() };
-        let _ = p::insert_released_product(&pool, sid, &row).await.map_err(|e| e.to_string())?;
+        let row = p::ReleasedRow {
+            product_json: serde_json::to_string(r).map_err(|e| e.to_string())?,
+            released_at: dom.macro_state.date.to_string(),
+        };
+        let _ = p::insert_released_product(&pool, sid, &row)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     // Mark done for autosave and rotate to last N=6
     if is_auto {
-        let _ = p::update_save_status(&pool, sid, "done").await.map_err(|e| e.to_string())?;
+        let _ = p::update_save_status(&pool, sid, "done")
+            .await
+            .map_err(|e| e.to_string())?;
         const N: usize = 6;
         if let Ok(list) = p::list_saves_by_prefix(&pool, "auto-").await {
             if list.len() > N {
@@ -885,9 +1363,18 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
 async fn sim_save(name: Option<String>) -> Result<i64, String> {
     let (dom, world) = {
         let g = SIM_STATE.read().unwrap();
-        let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
-        let date = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
-        let nm = name.unwrap_or_else(|| format!("manual-{}{:02}{:02}", date.year(), date.month(), date.day()));
+        let st = g
+            .as_ref()
+            .ok_or_else(|| "sim not initialized".to_string())?;
+        let date = st
+            .world
+            .resource::<runtime::DomainWorld>()
+            .0
+            .macro_state
+            .date;
+        let nm = name.unwrap_or_else(|| {
+            format!("manual-{}{:02}{:02}", date.year(), date.month(), date.day())
+        });
         (st.dom.clone(), st.world.clone())
     };
     save_now(name.unwrap_or_else(|| "manual".into()), dom, world).await
@@ -896,12 +1383,15 @@ async fn sim_save(name: Option<String>) -> Result<i64, String> {
 #[tauri::command]
 async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
-    // List saves by naive query since persistence doesn't expose it
-    let rows = sqlx::query("SELECT id, name, status, created_at FROM saves ORDER BY created_at DESC")
-        .fetch_all(&pool)
+    let pool = p::init_db(p::default_sqlite_url())
         .await
         .map_err(|e| e.to_string())?;
+    // List saves by naive query since persistence doesn't expose it
+    let rows =
+        sqlx::query("SELECT id, name, status, created_at FROM saves ORDER BY created_at DESC")
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
     let mut out: Vec<SaveInfo> = Vec::new();
     for r in rows {
         let id: i64 = r.try_get("id").unwrap_or(0);
@@ -914,7 +1404,13 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
             .flatten()
             .map(|(_sid, m, _d, _f)| m as u32)
             .unwrap_or(0);
-        out.push(SaveInfo { id, name, status, created_at, progress });
+        out.push(SaveInfo {
+            id,
+            name,
+            status,
+            created_at,
+            progress,
+        });
     }
     Ok(out)
 }
@@ -922,40 +1418,83 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
 #[tauri::command]
 async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url()).await.map_err(|e| e.to_string())?;
+    let pool = p::init_db(p::default_sqlite_url())
+        .await
+        .map_err(|e| e.to_string())?;
     let (_snap_id, _m, data, _fmt) = p::latest_snapshot(&pool, save_id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "no snapshot".to_string())?;
     let dom = p::deserialize_world_bincode(&data).map_err(|e| e.to_string())?;
-    let mut world = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
+    let mut world = runtime::init_world(
+        dom.clone(),
+        core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        },
+    );
     // Rehydrate contracts
-    let contracts = p::list_contracts(&pool, save_id).await.map_err(|e| e.to_string())?;
+    let contracts = p::list_contracts(&pool, save_id)
+        .await
+        .map_err(|e| e.to_string())?;
     if !contracts.is_empty() {
         let mut book = world.resource_mut::<runtime::CapacityBook>();
         for c in contracts {
-            let start = chrono::NaiveDate::parse_from_str(&c.start, "%Y-%m-%d").map_err(|e| e.to_string())?;
-            let end = chrono::NaiveDate::parse_from_str(&c.end, "%Y-%m-%d").map_err(|e| e.to_string())?;
-            book.contracts.push(runtime::FoundryContract { foundry_id: c.foundry_id, wafers_per_month: c.wafers_per_month as u32, price_per_wafer_cents: c.price_per_wafer_cents, take_or_pay_frac: c.take_or_pay_frac, billing_cents_per_wafer: c.billing_cents_per_wafer, billing_model: Box::leak(c.billing_model.into_boxed_str()), lead_time_months: c.lead_time_months as u8, start, end });
+            let start = chrono::NaiveDate::parse_from_str(&c.start, "%Y-%m-%d")
+                .map_err(|e| e.to_string())?;
+            let end =
+                chrono::NaiveDate::parse_from_str(&c.end, "%Y-%m-%d").map_err(|e| e.to_string())?;
+            book.contracts.push(runtime::FoundryContract {
+                foundry_id: c.foundry_id,
+                wafers_per_month: c.wafers_per_month as u32,
+                price_per_wafer_cents: c.price_per_wafer_cents,
+                take_or_pay_frac: c.take_or_pay_frac,
+                billing_cents_per_wafer: c.billing_cents_per_wafer,
+                billing_model: Box::leak(c.billing_model.into_boxed_str()),
+                lead_time_months: c.lead_time_months as u8,
+                start,
+                end,
+            });
         }
     }
     // Rehydrate released and queue
-    let released = p::list_released_products(&pool, save_id).await.map_err(|e| e.to_string())?;
+    let released = p::list_released_products(&pool, save_id)
+        .await
+        .map_err(|e| e.to_string())?;
     runtime::rehydrate_released_products(&mut world, &released);
-    let queue = p::list_tapeout_requests(&pool, save_id).await.map_err(|e| e.to_string())?;
+    let queue = p::list_tapeout_requests(&pool, save_id)
+        .await
+        .map_err(|e| e.to_string())?;
     if !queue.is_empty() {
         let mut pipe = world.resource_mut::<runtime::Pipeline>();
         for t in queue {
-            let product: core::ProductSpec = serde_json::from_str(&t.product_json).map_err(|e| e.to_string())?;
-            let start = chrono::NaiveDate::parse_from_str(&t.start, "%Y-%m-%d").map_err(|e| e.to_string())?;
-            let ready = chrono::NaiveDate::parse_from_str(&t.ready, "%Y-%m-%d").map_err(|e| e.to_string())?;
-            pipe.0.queue.push(core::TapeoutRequest { product, tech_node: core::TechNodeId(t.tech_node), start, ready, expedite: t.expedite != 0, expedite_cost_cents: t.expedite_cost_cents });
+            let product: core::ProductSpec =
+                serde_json::from_str(&t.product_json).map_err(|e| e.to_string())?;
+            let start = chrono::NaiveDate::parse_from_str(&t.start, "%Y-%m-%d")
+                .map_err(|e| e.to_string())?;
+            let ready = chrono::NaiveDate::parse_from_str(&t.ready, "%Y-%m-%d")
+                .map_err(|e| e.to_string())?;
+            pipe.0.queue.push(core::TapeoutRequest {
+                product,
+                tech_node: core::TechNodeId(t.tech_node),
+                start,
+                ready,
+                expedite: t.expedite != 0,
+                expedite_cost_cents: t.expedite_cost_cents,
+            });
         }
     }
     // Replace state
     {
         let mut guard = SIM_STATE.write().unwrap();
-        *guard = Some(SimState { world, dom, busy: false, scenario: None, tutorial: None, autosave: true });
+        *guard = Some(SimState {
+            world,
+            dom,
+            busy: false,
+            scenario: None,
+            tutorial: None,
+            autosave: true,
+        });
     }
     let g = SIM_STATE.read().unwrap();
     let st = g.as_ref().unwrap();
@@ -964,32 +1503,64 @@ async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
 
 #[tauri::command]
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct AutosavePolicy { enabled: bool, max_kept: usize }
+struct AutosavePolicy {
+    enabled: bool,
+    max_kept: usize,
+}
 
 #[tauri::command]
 fn sim_set_autosave(on: bool) -> Result<AutosavePolicy, String> {
     let mut g = SIM_STATE.write().unwrap();
-    let st = g.as_mut().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = g
+        .as_mut()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     st.autosave = on;
-    Ok(AutosavePolicy { enabled: st.autosave, max_kept: 6 })
+    Ok(AutosavePolicy {
+        enabled: st.autosave,
+        max_kept: 6,
+    })
 }
 
 #[tauri::command]
 fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), String> {
     // Always perform a dry-run export: clone the current world and simulate on the clone.
     let g = SIM_STATE.read().unwrap();
-    let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = g
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     // Determine months remaining until campaign end if present, else export 24 months
     let months = if let Some(cfg) = st.world.get_resource::<runtime::CampaignScenarioRes>() {
-        let today = st.world.resource::<runtime::DomainWorld>().0.macro_state.date;
+        let today = st
+            .world
+            .resource::<runtime::DomainWorld>()
+            .0
+            .macro_state
+            .date;
         let end = cfg.end;
-        ((end.year() - today.year()) * 12 + (end.month() as i32 - today.month() as i32)).max(0) as u32
-    } else { 24 };
-    if months == 0 { return Err("no months to simulate".into()); }
+        ((end.year() - today.year()) * 12 + (end.month() as i32 - today.month() as i32)).max(0)
+            as u32
+    } else {
+        24
+    };
+    if months == 0 {
+        return Err("no months to simulate".into());
+    }
     // Build a clone and run months in memory
     let mut dry = runtime::clone_world_state(&st.world);
     #[derive(serde::Serialize)]
-    struct Row { date: String, month_index: u32, cash_cents: i64, revenue_cents: i64, cogs_cents: i64, profit_cents: i64, asp_cents: i64, unit_cost_cents: i64, share: f32, output_units: u64, inventory_units: u64 }
+    struct Row {
+        date: String,
+        month_index: u32,
+        cash_cents: i64,
+        revenue_cents: i64,
+        cogs_cents: i64,
+        profit_cents: i64,
+        asp_cents: i64,
+        unit_cost_cents: i64,
+        share: f32,
+        output_units: u64,
+        inventory_units: u64,
+    }
     let mut rows: Vec<Row> = Vec::with_capacity(months as usize);
     for _ in 0..months {
         let (_s, _t) = runtime::run_months_in_place(&mut dry, 1);
@@ -997,17 +1568,39 @@ fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), Strin
         let stats = dry.resource::<runtime::Stats>();
         let pricing = dry.resource::<runtime::Pricing>();
         let date = dom.0.macro_state.date;
-        rows.push(Row { date: date.to_string(), month_index: stats.months_run, cash_cents: persistence::decimal_to_cents_i64(dom.0.companies[0].cash_usd).unwrap_or(0), revenue_cents: persistence::decimal_to_cents_i64(stats.revenue_usd).unwrap_or(0), cogs_cents: persistence::decimal_to_cents_i64(stats.cogs_usd).unwrap_or(0), profit_cents: persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0), asp_cents: persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0), unit_cost_cents: persistence::decimal_to_cents_i64(pricing.unit_cost_usd).unwrap_or(0), share: stats.market_share, output_units: stats.output_units, inventory_units: stats.inventory_units });
+        rows.push(Row {
+            date: date.to_string(),
+            month_index: stats.months_run,
+            cash_cents: persistence::decimal_to_cents_i64(dom.0.companies[0].cash_usd).unwrap_or(0),
+            revenue_cents: persistence::decimal_to_cents_i64(stats.revenue_usd).unwrap_or(0),
+            cogs_cents: persistence::decimal_to_cents_i64(stats.cogs_usd).unwrap_or(0),
+            profit_cents: persistence::decimal_to_cents_i64(stats.profit_usd).unwrap_or(0),
+            asp_cents: persistence::decimal_to_cents_i64(pricing.asp_usd).unwrap_or(0),
+            unit_cost_cents: persistence::decimal_to_cents_i64(pricing.unit_cost_usd).unwrap_or(0),
+            share: stats.market_share,
+            output_units: stats.output_units,
+            inventory_units: stats.inventory_units,
+        });
     }
     if path.ends_with(".json") || format.as_deref() == Some("json") {
-        if let Some(parent) = std::path::Path::new(&path).parent() { let _ = std::fs::create_dir_all(parent); }
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
         std::fs::write(&path, s).map_err(|e| e.to_string())?;
         return Ok(());
     } else if path.ends_with(".parquet") || format.as_deref() == Some("parquet") {
         let mut trows: Vec<persistence::TelemetryRow> = Vec::with_capacity(rows.len());
         for r in rows.iter() {
-            trows.push(persistence::TelemetryRow { month_index: r.month_index, output_units: r.output_units, sold_units: 0, asp_cents: r.asp_cents, unit_cost_cents: r.unit_cost_cents, margin_cents: r.profit_cents, revenue_cents: r.revenue_cents });
+            trows.push(persistence::TelemetryRow {
+                month_index: r.month_index,
+                output_units: r.output_units,
+                sold_units: 0,
+                asp_cents: r.asp_cents,
+                unit_cost_cents: r.unit_cost_cents,
+                margin_cents: r.profit_cents,
+                revenue_cents: r.revenue_cents,
+            });
         }
         persistence::write_telemetry_parquet(&path, &trows).map_err(|e| e.to_string())?;
         return Ok(());
@@ -1018,7 +1611,9 @@ fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), Strin
 #[tauri::command]
 fn sim_tutorial_state() -> Result<DtoTutorial, String> {
     let g = SIM_STATE.read().unwrap();
-    let st = g.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
+    let st = g
+        .as_ref()
+        .ok_or_else(|| "sim not initialized".to_string())?;
     let world = &st.world;
     let tut = world.resource::<runtime::TutorialState>();
     let mut steps: Vec<DtoTutStep> = Vec::new();
@@ -1031,10 +1626,21 @@ fn sim_tutorial_state() -> Result<DtoTutorial, String> {
                 "positive_cash_24m" => tut.step4_cash_24m_done,
                 _ => false,
             };
-            steps.push(DtoTutStep { id: s.id.clone(), desc: s.desc.clone(), hint: s.hint.clone(), nav_page: s.nav.page.clone(), nav_label: s.nav.label.clone(), done });
+            steps.push(DtoTutStep {
+                id: s.id.clone(),
+                desc: s.desc.clone(),
+                hint: s.hint.clone(),
+                nav_page: s.nav.page.clone(),
+                nav_label: s.nav.label.clone(),
+                done,
+            });
         }
     }
-    Ok(DtoTutorial { active: tut.enabled, current_step: tut.current_step_index, steps })
+    Ok(DtoTutorial {
+        active: tut.enabled,
+        current_step: tut.current_step_index,
+        steps,
+    })
 }
 
 #[cfg(test)]
@@ -1045,13 +1651,38 @@ mod tests {
     fn sequential_ticks_increase_month_index() {
         // Initialize state
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: rust_decimal::Decimal::new(1_000_000, 0), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: rust_decimal::Decimal::new(1_000_000, 0),
+                debt_usd: rust_decimal::Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let ecs = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
-        *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None });
+        let ecs = runtime::init_world(
+            dom.clone(),
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        *SIM_STATE.write().unwrap() = Some(SimState {
+            world: ecs,
+            dom,
+            busy: false,
+            scenario: None,
+        });
         // Run two ticks sequentially
         let rt = tauri::async_runtime::TokioRuntime::new().expect("rt");
         let s1 = rt.block_on(sim_tick(1)).expect("tick1");
@@ -1063,13 +1694,38 @@ mod tests {
     fn second_tick_returns_busy_status() {
         // Initialize state
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
             tech_tree: vec![],
-            companies: vec![core::Company { name: "A".into(), cash_usd: rust_decimal::Decimal::new(1_000_000, 0), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: rust_decimal::Decimal::new(1_000_000, 0),
+                debt_usd: rust_decimal::Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let ecs = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
-        *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: true, scenario: None });
+        let ecs = runtime::init_world(
+            dom.clone(),
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        *SIM_STATE.write().unwrap() = Some(SimState {
+            world: ecs,
+            dom,
+            busy: true,
+            scenario: None,
+        });
         // Try tick while busy
         let rt = tauri::async_runtime::TokioRuntime::new().expect("rt");
         let res = rt.block_on(sim_tick(1));
@@ -1087,20 +1743,67 @@ mod tests {
     fn overrides_apply_and_affect_state() {
         // Init state with a tech node for tapeout
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
-            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: rust_decimal::Decimal::new(1,0), freq_ghz_baseline: rust_decimal::Decimal::new(1,0), leakage_index: rust_decimal::Decimal::new(1,0), yield_baseline: rust_decimal::Decimal::new(9,1), wafer_cost_usd: rust_decimal::Decimal::new(1000,0), mask_set_cost_usd: rust_decimal::Decimal::new(5000,0), dependencies: vec![] }],
-            companies: vec![core::Company { name: "A".into(), cash_usd: rust_decimal::Decimal::new(1_000_000, 0), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: rust_decimal::Decimal::new(1, 0),
+                freq_ghz_baseline: rust_decimal::Decimal::new(1, 0),
+                leakage_index: rust_decimal::Decimal::new(1, 0),
+                yield_baseline: rust_decimal::Decimal::new(9, 1),
+                wafer_cost_usd: rust_decimal::Decimal::new(1000, 0),
+                mask_set_cost_usd: rust_decimal::Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: rust_decimal::Decimal::new(1_000_000, 0),
+                debt_usd: rust_decimal::Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let ecs = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
-        *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None });
+        let ecs = runtime::init_world(
+            dom.clone(),
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        *SIM_STATE.write().unwrap() = Some(SimState {
+            world: ecs,
+            dom,
+            busy: false,
+            scenario: None,
+        });
 
         // Apply price +5%
-        let r = sim_override(OverrideReq { price_delta_frac: Some(0.05), rd_delta_cents: None, capacity_request: None, tapeout: None }).expect("override");
+        let r = sim_override(OverrideReq {
+            price_delta_frac: Some(0.05),
+            rd_delta_cents: None,
+            capacity_request: None,
+            tapeout: None,
+        })
+        .expect("override");
         assert!(r.asp_cents.unwrap_or(0) > 0);
 
         // Apply R&D budget increase
-        let _ = sim_override(OverrideReq { price_delta_frac: None, rd_delta_cents: Some(10_000), capacity_request: None, tapeout: None }).expect("rd");
+        let _ = sim_override(OverrideReq {
+            price_delta_frac: None,
+            rd_delta_cents: Some(10_000),
+            capacity_request: None,
+            tapeout: None,
+        })
+        .expect("rd");
         {
             let g = SIM_STATE.read().unwrap();
             let world = &g.as_ref().unwrap().world;
@@ -1109,18 +1812,51 @@ mod tests {
         }
 
         // Capacity request
-        let _ = sim_override(OverrideReq { price_delta_frac: None, rd_delta_cents: None, capacity_request: Some(CapacityReq { wafers_per_month: 1000, months: 12, billing_cents_per_wafer: Some(5000), take_or_pay_frac: Some(1.0) }), tapeout: None }).expect("cap");
+        let _ = sim_override(OverrideReq {
+            price_delta_frac: None,
+            rd_delta_cents: None,
+            capacity_request: Some(CapacityReq {
+                wafers_per_month: 1000,
+                months: 12,
+                billing_cents_per_wafer: Some(5000),
+                take_or_pay_frac: Some(1.0),
+            }),
+            tapeout: None,
+        })
+        .expect("cap");
         {
             let g = SIM_STATE.read().unwrap();
             let world = &g.as_ref().unwrap().world;
-            assert!(!world.resource::<runtime::CapacityBook>().contracts.is_empty());
+            assert!(!world
+                .resource::<runtime::CapacityBook>()
+                .contracts
+                .is_empty());
         }
 
         // Tapeout expedited, then tick to ready and expect release
-        let resp = sim_override(OverrideReq { price_delta_frac: None, rd_delta_cents: None, capacity_request: None, tapeout: Some(TapeoutReq { perf_index: 0.8, die_area_mm2: 100.0, tech_node: "N90".into(), expedite: Some(true) }) }).expect("tapeout");
-        let ready = chrono::NaiveDate::parse_from_str(&resp.tapeout_ready.unwrap(), "%Y-%m-%d").unwrap();
+        let resp = sim_override(OverrideReq {
+            price_delta_frac: None,
+            rd_delta_cents: None,
+            capacity_request: None,
+            tapeout: Some(TapeoutReq {
+                perf_index: 0.8,
+                die_area_mm2: 100.0,
+                tech_node: "N90".into(),
+                expedite: Some(true),
+            }),
+        })
+        .expect("tapeout");
+        let ready =
+            chrono::NaiveDate::parse_from_str(&resp.tapeout_ready.unwrap(), "%Y-%m-%d").unwrap();
         // Compute months to ready from current date
-        let start = SIM_STATE.read().unwrap().as_ref().unwrap().dom.macro_state.date;
+        let start = SIM_STATE
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .dom
+            .macro_state
+            .date;
         let mut months = 0u32;
         let mut d = start;
         while d < ready && months < 24 {
@@ -1149,11 +1885,26 @@ mod tests {
         let s2 = sim_state().expect("state after");
         let kpi_after = serde_json::to_string(&s2.kpi).expect("ser kpi2");
         assert_eq!(kpi_after, kpi_before, "KPI changed after dry-run export");
-        assert_eq!(s2.month_index, s1.month_index, "month index changed after export");
+        assert_eq!(
+            s2.month_index, s1.month_index,
+            "month index changed after export"
+        );
         // File valid JSON of array of rows
         let text = std::fs::read_to_string(&path).expect("read export");
         #[derive(serde::Deserialize)]
-        struct Row { date: String, month_index: u32, cash_cents: i64, revenue_cents: i64, cogs_cents: i64, profit_cents: i64, asp_cents: i64, unit_cost_cents: i64, share: f32, output_units: u64, inventory_units: u64 }
+        struct Row {
+            date: String,
+            month_index: u32,
+            cash_cents: i64,
+            revenue_cents: i64,
+            cogs_cents: i64,
+            profit_cents: i64,
+            asp_cents: i64,
+            unit_cost_cents: i64,
+            share: f32,
+            output_units: u64,
+            inventory_units: u64,
+        }
         let rows: Vec<Row> = serde_json::from_str(&text).expect("parse json");
         assert!(!rows.is_empty(), "no rows exported");
     }
@@ -1161,13 +1912,48 @@ mod tests {
     #[test]
     fn state_dto_roundtrip_and_updates() {
         let dom = core::World {
-            macro_state: core::MacroState { date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), inflation_annual: 0.02, interest_rate: 0.05, fx_usd_index: 100.0 },
-            tech_tree: vec![core::TechNode { id: core::TechNodeId("N90".into()), year_available: 1990, density_mtr_per_mm2: rust_decimal::Decimal::new(1,0), freq_ghz_baseline: rust_decimal::Decimal::new(1,0), leakage_index: rust_decimal::Decimal::new(1,0), yield_baseline: rust_decimal::Decimal::new(9,1), wafer_cost_usd: rust_decimal::Decimal::new(1000,0), mask_set_cost_usd: rust_decimal::Decimal::new(5000,0), dependencies: vec![] }],
-            companies: vec![core::Company { name: "A".into(), cash_usd: rust_decimal::Decimal::new(1_000_000, 0), debt_usd: rust_decimal::Decimal::ZERO, ip_portfolio: vec![] }],
-            segments: vec![core::MarketSegment { name: "Seg".into(), base_demand_units: 1_000_000, price_elasticity: -1.2 }],
+            macro_state: core::MacroState {
+                date: chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                inflation_annual: 0.02,
+                interest_rate: 0.05,
+                fx_usd_index: 100.0,
+            },
+            tech_tree: vec![core::TechNode {
+                id: core::TechNodeId("N90".into()),
+                year_available: 1990,
+                density_mtr_per_mm2: rust_decimal::Decimal::new(1, 0),
+                freq_ghz_baseline: rust_decimal::Decimal::new(1, 0),
+                leakage_index: rust_decimal::Decimal::new(1, 0),
+                yield_baseline: rust_decimal::Decimal::new(9, 1),
+                wafer_cost_usd: rust_decimal::Decimal::new(1000, 0),
+                mask_set_cost_usd: rust_decimal::Decimal::new(5000, 0),
+                dependencies: vec![],
+            }],
+            companies: vec![core::Company {
+                name: "A".into(),
+                cash_usd: rust_decimal::Decimal::new(1_000_000, 0),
+                debt_usd: rust_decimal::Decimal::ZERO,
+                ip_portfolio: vec![],
+            }],
+            segments: vec![core::MarketSegment {
+                name: "Seg".into(),
+                base_demand_units: 1_000_000,
+                price_elasticity: -1.2,
+            }],
         };
-        let ecs = runtime::init_world(dom.clone(), core::SimConfig { tick_days: 30, rng_seed: 42 });
-        *SIM_STATE.write().unwrap() = Some(SimState { world: ecs, dom, busy: false, scenario: None });
+        let ecs = runtime::init_world(
+            dom.clone(),
+            core::SimConfig {
+                tick_days: 30,
+                rng_seed: 42,
+            },
+        );
+        *SIM_STATE.write().unwrap() = Some(SimState {
+            world: ecs,
+            dom,
+            busy: false,
+            scenario: None,
+        });
         // Initial state
         let s1 = sim_state().expect("state");
         let js = serde_json::to_string(&s1).expect("ser");
@@ -1179,7 +1965,13 @@ mod tests {
         let s2 = sim_state().expect("state2");
         assert!(s2.month_index > s1.month_index);
         // Price override updates pricing in dto
-        let _ = sim_override(OverrideReq { price_delta_frac: Some(0.05), rd_delta_cents: None, capacity_request: None, tapeout: None }).unwrap();
+        let _ = sim_override(OverrideReq {
+            price_delta_frac: Some(0.05),
+            rd_delta_cents: None,
+            capacity_request: None,
+            tapeout: None,
+        })
+        .unwrap();
         let s3 = sim_state().unwrap();
         assert!(s3.pricing.asp_cents >= s2.pricing.asp_cents);
     }
@@ -1200,10 +1992,16 @@ mod tests {
         let mut tries = 0;
         loop {
             let list = rt.block_on(sim_list_saves()).unwrap_or_default();
-            let autos: Vec<_> = list.into_iter().filter(|s| s.name.starts_with("auto-")).collect();
+            let autos: Vec<_> = list
+                .into_iter()
+                .filter(|s| s.name.starts_with("auto-"))
+                .collect();
             if autos.len() >= 2 || tries > 50 {
                 assert!(autos.len() >= 2, "expected at least 2 autosaves");
-                assert!(autos.iter().all(|s| s.status == "done"), "autosaves not done");
+                assert!(
+                    autos.iter().all(|s| s.status == "done"),
+                    "autosaves not done"
+                );
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1217,10 +2015,16 @@ mod tests {
         let mut tries = 0;
         loop {
             let list = rt.block_on(sim_list_saves()).unwrap_or_default();
-            let autos: Vec<_> = list.into_iter().filter(|s| s.name.starts_with("auto-")).collect();
+            let autos: Vec<_> = list
+                .into_iter()
+                .filter(|s| s.name.starts_with("auto-"))
+                .collect();
             if autos.len() == 6 || tries > 60 {
                 assert_eq!(autos.len(), 6, "rotation should keep last 6 autosaves");
-                assert!(autos.iter().all(|s| s.status == "done"), "rotated autosaves should be done");
+                assert!(
+                    autos.iter().all(|s| s.status == "done"),
+                    "rotated autosaves should be done"
+                );
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1239,13 +2043,20 @@ mod tests {
             let ai = st.world.resource::<runtime::AiConfig>().0.clone();
             let markets = st.world.resource::<runtime::MarketConfigRes>().clone();
             // take first segment growth as baseline
-            let growth = markets.segments.first().map(|s| s.annual_growth_pct).unwrap_or(1.0);
+            let growth = markets
+                .segments
+                .first()
+                .map(|s| s.annual_growth_pct)
+                .unwrap_or(1.0);
             // pick a market event base_demand_pct if any
             let mut ev_mag = 0.0f64;
             if let Some(ev) = st.world.get_resource::<runtime::MarketEventConfigRes>() {
                 for v in &ev.0.events {
                     if let Some(me) = v.get("market_effect") {
-                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) { ev_mag = b; break; }
+                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) {
+                            ev_mag = b;
+                            break;
+                        }
                     }
                 }
             }
@@ -1259,7 +2070,11 @@ mod tests {
         let ai2 = st.world.resource::<runtime::AiConfig>().0.clone();
         assert!(ai2.tactics.min_margin_frac >= 0.10 - 1e-6);
         let markets2 = st.world.resource::<runtime::MarketConfigRes>().clone();
-        let growth2 = markets2.segments.first().map(|s| s.annual_growth_pct).unwrap_or(1.0);
+        let growth2 = markets2
+            .segments
+            .first()
+            .map(|s| s.annual_growth_pct)
+            .unwrap_or(1.0);
         assert!(growth2 <= base_growth * 0.81 + 1e-6);
         if base_event > 0.0 {
             // event magnitude increased by ~1.25x
@@ -1267,7 +2082,10 @@ mod tests {
             if let Some(ev) = st.world.get_resource::<runtime::MarketEventConfigRes>() {
                 for v in &ev.0.events {
                     if let Some(me) = v.get("market_effect") {
-                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) { ev_mag2 = b; break; }
+                        if let Some(b) = me.get("base_demand_pct").and_then(|x| x.as_f64()) {
+                            ev_mag2 = b;
+                            break;
+                        }
                     }
                 }
             }
@@ -1301,12 +2119,25 @@ mod tests {
         // Valid difficulty
         let diff = std::fs::read_to_string("assets/scenarios/difficulty.yaml").expect("read");
         #[derive(serde::Deserialize, JsonSchema)]
-        struct Level { cash_multiplier: f32, min_margin_frac: f32, price_epsilon_frac: f32, take_or_pay_frac: f32, annual_growth_pct_multiplier: f32, event_severity_multiplier: f32 }
+        struct Level {
+            cash_multiplier: f32,
+            min_margin_frac: f32,
+            price_epsilon_frac: f32,
+            take_or_pay_frac: f32,
+            annual_growth_pct_multiplier: f32,
+            event_severity_multiplier: f32,
+        }
         #[derive(serde::Deserialize, JsonSchema)]
-        struct Root { levels: std::collections::HashMap<String, Level> }
+        struct Root {
+            levels: std::collections::HashMap<String, Level>,
+        }
         assert!(validate_yaml::<Root>(&diff, "difficulty").is_ok());
         let broken_d = "levels: { easy: { min_margin_frac: low } }";
         let err4 = validate_yaml::<Root>(broken_d, "difficulty").unwrap_err();
-        assert!(err4.contains("/levels/easy/min_margin_frac"), "err: {}", err4);
+        assert!(
+            err4.contains("/levels/easy/min_margin_frac"),
+            "err: {}",
+            err4
+        );
     }
 }
