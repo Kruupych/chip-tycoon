@@ -21,9 +21,13 @@ bench:
 ai-bench:
     cargo criterion --bench ai_bench
 
-# Запуск headless-симуляции (пример)
-sim:
-    cargo run -p cli -- --campaign 1990s
+# Запуск headless-симуляции с произвольными аргументами
+sim *ARGS:
+    cargo run -p cli -- {{ARGS}}
+
+# Упрощённый запуск кампании 1990s (по умолчанию)
+sim-campaign WHICH="1990s":
+    cargo run -p cli -- --campaign {{WHICH}}
 
 export-campaign path="telemetry/campaign_1990s.json":
     cargo run -p cli -- --campaign 1990s --export-campaign {{path}}
