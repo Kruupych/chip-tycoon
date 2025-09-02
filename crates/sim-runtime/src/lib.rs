@@ -1923,7 +1923,9 @@ mod tests {
             mask_set_cost_usd: Decimal::new(2_500_000, 2),
             dependencies: vec![],
         }];
-        let markets = MarketConfigRes::from_yaml_str(include_str!("../../../assets/data/markets_1990s.yaml")).unwrap();
+        let markets =
+            MarketConfigRes::from_yaml_str(include_str!("../../../assets/data/markets_1990s.yaml"))
+                .unwrap();
         let start = chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
         let segments: Vec<core::MarketSegment> = markets
             .segments
