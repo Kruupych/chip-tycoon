@@ -1,9 +1,18 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState } from "./api";
 
 export function App() {
-  const { snapshot, setSnapshot, loading, setLoading } = useAppStore();
+  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
+  useEffect(() => {
+    // initial load lists/state
+    (async () => {
+      try {
+        setLists(await getSimLists());
+        setStateDto(await getSimState());
+      } catch (e) {}
+    })();
+  }, [setLists, setStateDto]);
   const [nav, setNav] = useState<"dashboard" | "markets" | "rd" | "capacity" | "ai">(
     "dashboard"
   );
@@ -36,16 +45,19 @@ export function App() {
         </div>
         <div style={{ marginTop: 16 }}>
           <button
-            disabled={loading}
+            disabled={loading || isBusy}
             onClick={async () => {
               setLoading(true);
+              setBusy(true);
               try {
                 const snap = await simTick(1);
                 setSnapshot(snap);
+                setStateDto(await getSimState());
               } catch (e: any) {
-                alert(e?.toString?.() ?? String(e));
+                setError(e?.toString?.() ?? String(e));
               } finally {
                 setLoading(false);
+                setBusy(false);
               }
             }}
           >
@@ -55,7 +67,7 @@ export function App() {
       </div>
       <div style={{ flex: 1, padding: 16 }}>
         <div style={{ marginBottom: 8, color: "#666" }}>
-          Month #{snapshot?.months_run ?? 0}
+          {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
         </div>
         {nav === "dashboard" && <Dashboard />}
         {nav === "markets" && <Markets />}
@@ -72,23 +84,29 @@ function cents(n?: number) {
 }
 
 function Dashboard() {
-  const { snapshot } = useAppStore();
-  if (!snapshot) return <div>No data yet.</div>;
+  const { snapshot, stateDto, history } = useAppStore();
+  if (!stateDto) return <div>No data yet.</div>;
+  const kpi = stateDto.kpi;
+  const data = history.map((h) => ({ m: h.months_run, revenue: h.revenue_cents / 100, profit: h.profit_cents / 100 }));
   return (
     <div>
       <h2>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <Kpi label="Cash" value={cents(snapshot.cash_cents)} />
-        <Kpi label="Revenue" value={cents(snapshot.revenue_cents)} />
-        <Kpi label="COGS" value={cents(snapshot.cogs_cents)} />
-        <Kpi label="Contract Costs" value={cents(snapshot.contract_costs_cents)} />
-        <Kpi label="Profit" value={cents(snapshot.profit_cents)} />
-        <Kpi label="ASP" value={cents(snapshot.asp_cents)} />
-        <Kpi label="Unit Cost" value={cents(snapshot.unit_cost_cents)} />
-        <Kpi label="Share" value={`${(snapshot.market_share * 100).toFixed(1)}%`} />
-        <Kpi label="R&D" value={`${(snapshot.rd_progress * 100).toFixed(1)}%`} />
-        <Kpi label="Output" value={`${snapshot.output_units}`} />
-        <Kpi label="Inventory" value={`${snapshot.inventory_units}`} />
+        <Kpi label="Cash" value={cents(kpi.cash_cents)} />
+        <Kpi label="Revenue" value={cents(kpi.revenue_cents)} />
+        <Kpi label="COGS" value={cents(kpi.cogs_cents)} />
+        <Kpi label="Contract Costs" value={cents(kpi.contract_costs_cents)} />
+        <Kpi label="Profit" value={cents(kpi.profit_cents)} />
+        <Kpi label="ASP" value={cents(stateDto.pricing.asp_cents)} />
+        <Kpi label="Unit Cost" value={cents(stateDto.pricing.unit_cost_cents)} />
+        <Kpi label="Share" value={`${(kpi.share * 100).toFixed(1)}%`} />
+        <Kpi label="R&D" value={`${(kpi.rd_pct * 100).toFixed(1)}%`} />
+        <Kpi label="Output" value={`${kpi.output_units}`} />
+        <Kpi label="Inventory" value={`${kpi.inventory_units}`} />
+      </div>
+      <div style={{ marginTop: 16 }}>
+        <h3>Revenue vs Profit</h3>
+        <LineChart data={data} />
       </div>
     </div>
   );
@@ -99,6 +117,7 @@ function Markets() {
   return (
     <div>
       <h2>Markets</h2>
+      <SegmentsTable />
       <div>
         <label>Price delta (%): </label>
         <input
@@ -127,6 +146,7 @@ function RD() {
   return (
     <div>
       <h2>R&D / Tapeout</h2>
+      <QueueTable />
       <div>
         <label>R&D Δ (cents/mo): </label>
         <input type="number" value={rd} onChange={(e) => setRd(Number(e.target.value))} />
@@ -155,6 +175,7 @@ function Capacity() {
   return (
     <div>
       <h2>Capacity</h2>
+      <ContractsTable />
       <div>
         <label>Wafers/mo: </label>
         <input type="number" value={wpm} onChange={(e) => setWpm(Number(e.target.value))} />
@@ -191,5 +212,65 @@ function Kpi({ label, value }: { label: string; value: string }) {
       <div style={{ fontSize: 12, color: "#666" }}>{label}</div>
       <div style={{ fontSize: 20 }}>{value}</div>
     </div>
+  );
+}
+
+function SegmentsTable() {
+  const { stateDto } = useAppStore();
+  if (!stateDto) return null;
+  return (
+    <table style={{ width: "100%", margin: "8px 0" }}>
+      <thead>
+        <tr><th align="left">Segment</th><th>Base Demand</th><th>Elasticity</th></tr>
+      </thead>
+      <tbody>
+        {stateDto.segments.map((s) => (
+          <tr key={s.name}><td>{s.name}</td><td align="right">{s.base_demand_units}</td><td align="right">{s.price_elasticity}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ContractsTable() {
+  const { stateDto } = useAppStore();
+  if (!stateDto) return null;
+  return (
+    <table style={{ width: "100%", margin: "8px 0" }}>
+      <thead>
+        <tr><th align="left">Foundry</th><th>Wafers/mo</th><th>Billing</th><th>ToP</th><th>Start</th><th>End</th></tr>
+      </thead>
+      <tbody>
+        {stateDto.contracts.map((c, i) => (
+          <tr key={i}><td>{c.foundry_id}</td><td align="right">{c.wafers_per_month}</td><td align="right">{c.billing_cents_per_wafer}c</td><td align="right">{Math.round(c.take_or_pay_frac * 100)}%</td><td>{c.start}</td><td>{c.end}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function QueueTable() {
+  const { stateDto } = useAppStore();
+  if (!stateDto) return null;
+  return (
+    <table style={{ width: "100%", margin: "8px 0" }}>
+      <thead>
+        <tr><th align="left">Tech</th><th>Start</th><th>Ready</th><th>Expedite</th><th>Cost</th><th>Perf</th></tr>
+      </thead>
+      <tbody>
+        {stateDto.pipeline.queue.map((q, i) => (
+          <tr key={i}><td>{q.tech_node}</td><td>{q.start}</td><td>{q.ready}</td><td align="center">{q.expedite ? "Yes" : "No"}</td><td align="right">{cents(q.expedite_cost_cents)}</td><td align="right">{q.perf_index}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function LineChart({ data }: { data: { m: number; revenue: number; profit: number }[] }) {
+  // Minimal inline chart: print as CSV rows if recharts not available at runtime
+  return (
+    <pre style={{ background: "#fafafa", padding: 8 }}>
+      {data.map((d) => `m${d.m}: R=${d.revenue.toFixed(0)} P=${d.profit.toFixed(0)}`).join("\n")}
+    </pre>
   );
 }

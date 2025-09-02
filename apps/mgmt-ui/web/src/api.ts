@@ -53,3 +53,55 @@ export type OverrideResp = {
 export async function simOverride(payload: OverrideReq) {
   return invoke<OverrideResp>("sim_override", { ovr: payload });
 }
+
+export type SimStateDto = {
+  date: string;
+  month_index: number;
+  companies: { name: string; cash_cents: number; debt_cents: number }[];
+  segments: { name: string; base_demand_units: number; price_elasticity: number }[];
+  pricing: { asp_cents: number; unit_cost_cents: number };
+  kpi: {
+    cash_cents: number;
+    revenue_cents: number;
+    cogs_cents: number;
+    contract_costs_cents: number;
+    profit_cents: number;
+    share: number;
+    rd_pct: number;
+    output_units: number;
+    inventory_units: number;
+  };
+  contracts: {
+    foundry_id: string;
+    wafers_per_month: number;
+    billing_cents_per_wafer: number;
+    take_or_pay_frac: number;
+    start: string;
+    end: string;
+  }[];
+  pipeline: {
+    queue: {
+      tech_node: string;
+      start: string;
+      ready: string;
+      expedite: boolean;
+      expedite_cost_cents: number;
+      perf_index: number;
+    }[];
+    released: { tech_node: { 0: string } }[] | any[];
+  };
+};
+
+export type SimListsDto = {
+  tech_nodes: string[];
+  foundries: string[];
+  segments: string[];
+};
+
+export async function getSimState() {
+  return invoke<SimStateDto>("sim_state");
+}
+
+export async function getSimLists() {
+  return invoke<SimListsDto>("sim_lists");
+}
