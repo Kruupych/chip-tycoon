@@ -1,0 +1,17 @@
+[package]
+name = "sim-econ"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+rust_decimal = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+tracing = { workspace = true }
+sim-core = { path = "../sim-core" }
+
+[dev-dependencies]
+proptest = { workspace = true }

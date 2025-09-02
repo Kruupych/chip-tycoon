@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Build CLI
+        run: cargo build -p cli --release
+      - name: Build Game Frontend
+        run: cargo build -p game-frontend --release
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: chip-tycoon-binaries
+          path: |
+            target/release/cli
+            target/release/game-frontend

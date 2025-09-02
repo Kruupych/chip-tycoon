@@ -1,0 +1,12 @@
+[package]
+name = "modkit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+rhai = { workspace = true }
+tracing = { workspace = true }
+sim-core = { path = "../sim-core" }

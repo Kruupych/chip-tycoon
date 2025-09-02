@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/sim-core",
+    "crates/sim-econ",
+    "crates/sim-ai",
+    "crates/sim-runtime",
+    "crates/persistence",
+    "crates/data-pipeline",
+    "crates/modkit",
+    "apps/game-frontend",
+    "apps/cli",
+]
+
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["chip-tycoon contributors"]
+rust-version = "1.75"
+
+[workspace.dependencies]
+anyhow = "1"
+bincode = "1"
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+rand = "0.8"
+rand_chacha = "0.3"
+rust_decimal = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Bevy (runtime/game)
+bevy = { version = "0.13", default-features = false, features = ["bevy_asset", "bevy_winit"] }
+bevy_ecs = "0.13"
+
+# DB and async
+sqlx = { version = "0.7", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time"] }
+
+# Data pipeline
+arrow = "52"
+parquet = "52"
+
+# Scripting (modding)
+rhai = { version = "1", features = ["decimal"] }
+
+# Testing/bench
+proptest = "1"
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
