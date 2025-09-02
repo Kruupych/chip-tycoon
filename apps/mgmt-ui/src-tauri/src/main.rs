@@ -7,6 +7,35 @@ use serde::{Deserialize, Serialize};
 use sim_core as core;
 use sim_runtime as runtime;
 use std::sync::{Arc, RwLock, Mutex};
+use schemars::JsonSchema;
+
+fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(yaml_text: &str, schema_name: &str) -> Result<(), String> {
+    // Build schema from type
+    let schema = schemars::schema_for!(T);
+    let schema_json = serde_json::to_value(&schema).map_err(|e| e.to_string())?;
+    // Optionally persist schema under assets/schema
+    let out_path = format!("assets/schema/{}.json", schema_name);
+    if let Ok(s) = serde_json::to_string_pretty(&schema_json) {
+        let _ = std::fs::create_dir_all("assets/schema");
+        let _ = std::fs::write(&out_path, s);
+    }
+    // Parse YAML as JSON value
+    let data_yaml: serde_yaml::Value = serde_yaml::from_str(yaml_text).map_err(|e| e.to_string())?;
+    let data_json = serde_json::to_value(data_yaml).map_err(|e| e.to_string())?;
+    // Validate
+    let compiled = jsonschema::JSONSchema::compile(&schema_json).map_err(|e| e.to_string())?;
+    if let Err(errors) = compiled.validate(&data_json) {
+        // Build human-readable error list
+        let mut msgs: Vec<String> = Vec::new();
+        for err in errors {
+            let path = err.instance_path.to_string();
+            msgs.push(format!("{}: {}", if path.is_empty() { "/".into() } else { path }, err));
+        }
+        let joined = msgs.join("; ");
+        return Err(joined);
+    }
+    Ok(())
+}
 
 struct SimState {
     world: runtime::World,
@@ -295,7 +324,7 @@ struct DtoTutStep { id: String, desc: String, hint: String, nav_page: String, na
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DtoTutorial { active: bool, current_step: u8, steps: Vec<DtoTutStep> }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct TutorialCfg {
     #[serde(default)]
     cash_threshold_cents_month24: i64,
@@ -303,13 +332,13 @@ struct TutorialCfg {
     steps: Vec<TutorialStepCfg>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct TutorialStepCfg { id: String, desc: String, hint: String, nav: TutorialNavCfg }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct TutorialNavCfg { page: String, label: String, button: String }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 struct CampaignScenario {
     start_date: String,
     end_date: String,
@@ -320,13 +349,37 @@ struct CampaignScenario {
     events_yaml: String,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(tag = "type")]
 enum YamlGoal { #[serde(rename="reach_share")] ReachShare { segment: String, min_share: f32, deadline: String }, #[serde(rename="launch_node")] LaunchNode { node: String, deadline: String }, #[serde(rename="profit_target")] ProfitTarget { profit_cents: i64, deadline: String }, #[serde(rename="survive_event")] SurviveEvent { event_id: String, deadline: String } }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
 #[serde(tag = "type")]
 enum YamlFail { #[serde(rename="cash_below")] CashBelow { threshold_cents: i64 }, #[serde(rename="share_below")] ShareBelow { segment: String, min_share: f32, deadline: String } }
+
+// -------- Asset schema DTOs --------
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+struct MarketsRoot { segments: Vec<MarketSegSchema> }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum U64OrStr { U(u64), S(String) }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum I64OrStrV { I(i64), S(String) }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+struct MarketStepSchema { start: String, months: u32, #[serde(default)] base_demand_pct: Option<f32>, #[serde(default)] ref_price_pct: Option<f32>, #[serde(default)] elasticity_delta: Option<f32> }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+struct MarketSegSchema { id: String, name: String, base_demand_units_1990: U64OrStr, base_asp_cents_1990: I64OrStrV, elasticity: f32, annual_growth_pct: f32, #[serde(default)] step_events: Vec<MarketStepSchema> }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+struct TechRoot { nodes: Vec<TechNodeSchema> }
+
+#[derive(Clone, Debug, serde::Deserialize, JsonSchema)]
+struct TechNodeSchema { id: String, year_available: i32, wafer_cost_cents: i64, yield_baseline: f32, mask_set_cost_cents: i64, #[serde(default)] deps: Option<Vec<String>> }
 
 fn build_sim_state_dto(st: &SimState) -> SimStateDto {
     let world = &st.world;
@@ -530,10 +583,17 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     let id = which.unwrap_or_else(|| "1990s".to_string());
     let path = match id.as_str() { "1990s" => "assets/scenarios/campaign_1990s.yaml".to_string(), _ => id };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    // Validate scenario YAML
+    validate_yaml::<CampaignScenario>(&text, "campaign").map_err(|e| format!("campaign.yaml invalid: {e}"))?;
     let sc: CampaignScenario = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
     // Build new dom
     let start = chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    // Validate and load tech + markets assets
+    let tech_text = std::fs::read_to_string("assets/data/tech_era_1990s.yaml").map_err(|e| e.to_string())?;
+    validate_yaml::<TechRoot>(&tech_text, "tech_era").map_err(|e| format!("tech_era_1990s.yaml invalid: {e}"))?;
     let tech_nodes = load_tech_nodes("assets/data/tech_era_1990s.yaml");
+    let markets_text = std::fs::read_to_string("assets/data/markets_1990s.yaml").map_err(|e| e.to_string())?;
+    validate_yaml::<MarketsRoot>(&markets_text, "markets").map_err(|e| format!("markets_1990s.yaml invalid: {e}"))?;
     let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml").unwrap_or_default();
     let segments: Vec<core::MarketSegment> = markets
         .segments
@@ -681,11 +741,13 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
         cfg.difficulty = Some(level.clone());
     }
     // Load presets
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, JsonSchema)]
     struct Level { cash_multiplier: f32, min_margin_frac: f32, price_epsilon_frac: f32, take_or_pay_frac: f32, annual_growth_pct_multiplier: f32, event_severity_multiplier: f32 }
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, JsonSchema)]
     struct Root { levels: std::collections::HashMap<String, Level> }
     let text = std::fs::read_to_string("assets/scenarios/difficulty.yaml").map_err(|e| e.to_string())?;
+    // Validate difficulty before applying
+    validate_yaml::<Root>(&text, "difficulty").map_err(|e| format!("difficulty.yaml invalid: {e}"))?;
     let root: Root = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
     let Some(preset) = root.levels.get(&level) else { return Err("unknown difficulty".into()) };
     // Apply to AI config
@@ -1199,5 +1261,40 @@ mod tests {
             }
             assert!(ev_mag2 >= base_event * 1.24);
         }
+    }
+
+    #[test]
+    fn yaml_schema_validation_works() {
+        // Valid markets
+        let markets = std::fs::read_to_string("assets/data/markets_1990s.yaml").expect("read");
+        assert!(validate_yaml::<MarketsRoot>(&markets, "markets").is_ok());
+        // Broken markets (id not string)
+        let broken = "segments: [ { id: 123, name: A, base_demand_units_1990: 1, base_asp_cents_1990: 1, elasticity: -1.0, annual_growth_pct: 0.0 } ]";
+        let err = validate_yaml::<MarketsRoot>(broken, "markets").unwrap_err();
+        assert!(err.contains("/segments/0/id"), "err: {}", err);
+        // Valid tech era
+        let tech = std::fs::read_to_string("assets/data/tech_era_1990s.yaml").expect("read");
+        assert!(validate_yaml::<TechRoot>(&tech, "tech_era").is_ok());
+        // Broken tech (year_available wrong type)
+        let broken_t = "nodes: [ { id: N90, year_available: foo, wafer_cost_cents: 1, yield_baseline: 0.9, mask_set_cost_cents: 1 } ]";
+        let err2 = validate_yaml::<TechRoot>(broken_t, "tech_era").unwrap_err();
+        assert!(err2.contains("/nodes/0/year_available"), "err: {}", err2);
+        // Valid campaign
+        let camp = std::fs::read_to_string("assets/scenarios/campaign_1990s.yaml").expect("read");
+        assert!(validate_yaml::<CampaignScenario>(&camp, "campaign").is_ok());
+        // Broken campaign (missing start_date)
+        let broken_c = "end_date: 2000-01-01";
+        let err3 = validate_yaml::<CampaignScenario>(broken_c, "campaign").unwrap_err();
+        assert!(err3.contains("/start_date"), "err: {}", err3);
+        // Valid difficulty
+        let diff = std::fs::read_to_string("assets/scenarios/difficulty.yaml").expect("read");
+        #[derive(serde::Deserialize, JsonSchema)]
+        struct Level { cash_multiplier: f32, min_margin_frac: f32, price_epsilon_frac: f32, take_or_pay_frac: f32, annual_growth_pct_multiplier: f32, event_severity_multiplier: f32 }
+        #[derive(serde::Deserialize, JsonSchema)]
+        struct Root { levels: std::collections::HashMap<String, Level> }
+        assert!(validate_yaml::<Root>(&diff, "difficulty").is_ok());
+        let broken_d = "levels: { easy: { min_margin_frac: low } }";
+        let err4 = validate_yaml::<Root>(broken_d, "difficulty").unwrap_err();
+        assert!(err4.contains("/levels/easy/min_margin_frac"), "err: {}", err4);
     }
 }
