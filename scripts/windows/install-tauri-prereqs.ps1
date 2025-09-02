@@ -45,21 +45,11 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 
 # Add @tauri-apps/cli as dev dependency in apps/mgmt-ui
 $uiRoot = Join-Path (Get-Location) 'apps/mgmt-ui'
-Push-Location $uiRoot
-try {
-  if (-not (Test-Path 'package.json')) {
-    Write-Host "Creating minimal package.json in apps/mgmt-ui"
-    @'
-{
-  "name": "mgmt-ui-root",
-  "private": true,
-  "devDependencies": {}
-}
-'@ | Set-Content -NoNewline -Path package.json -Encoding utf8
-  }
-  Write-Host "Ensuring @tauri-apps/cli is installed (dev dep)"
-  pnpm add -D @tauri-apps/cli | Out-Null
-} finally {
-  Pop-Location
+$webRoot = Join-Path $uiRoot 'web'
+if (-not (Test-Path (Join-Path $webRoot 'package.json'))) {
+  Write-Warning "apps/mgmt-ui/web/package.json not found; ensure the frontend is present."
+} else {
+  Write-Host "Ensuring @tauri-apps/cli is installed in web dev-deps"
+  pnpm --dir $webRoot add -D @tauri-apps/cli | Out-Null
 }
 Write-Host "[tauri] Prerequisite check complete." -ForegroundColor Green
