@@ -1109,6 +1109,23 @@ fn main() {
     });
 
     tauri::Builder::<tauri::Wry>::default()
+        .setup(|app| {
+            #[cfg(debug_assertions)]
+            {
+                // Try to open devtools on startup in debug
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.open_devtools();
+                }
+                // Register F12 to open devtools
+                let handle = app.handle();
+                let _ = app.global_shortcut().register("F12", move || {
+                    if let Some(win) = handle.get_webview_window("main") {
+                        let _ = win.open_devtools();
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             sim_tick,
             sim_tick_quarter,
