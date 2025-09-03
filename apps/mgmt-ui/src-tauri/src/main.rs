@@ -2,6 +2,7 @@
 #![deny(warnings)]
 
 use chrono::Datelike;
+use tauri::Manager; // for AppHandle.path()
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,11 +20,11 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     let schema = schemars::schema_for!(T);
     let schema_json = serde_json::to_value(&schema).map_err(|e| e.to_string())?;
     // Optionally persist schema under assets/schema
-    let out_path = format!("assets/schema/{}.json", schema_name);
-    if let Ok(s) = serde_json::to_string_pretty(&schema_json) {
-        // Best-effort in debug builds only; ignore errors in release runtime.
-        #[cfg(debug_assertions)]
-        {
+    // Best-effort write in debug builds only; avoid unused variables in release.
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(s) = serde_json::to_string_pretty(&schema_json) {
+            let out_path = format!("assets/schema/{}.json", schema_name);
             let _ = std::fs::create_dir_all("assets/schema");
             let _ = std::fs::write(&out_path, s);
         }
