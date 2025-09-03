@@ -4,7 +4,8 @@
   "identifier": "com.chiptycoon.mgmt",
   "version": "0.1.0",
   "build": {
-    "frontendDist": "../web/dist"
+    "frontendDist": "../web/dist",
+    "beforeBuildCommand": "pnpm --dir ../web install && pnpm --dir ../web build"
   },
   "app": {
     "windows": [

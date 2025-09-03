@@ -1,5 +1,7 @@
 # justfile — команды для разработки
 set shell := ["bash", "-cu"]
+# Use PowerShell on Windows hosts
+set windows-shell := ["powershell", "-NoProfile", "-Command"]
 
 # Сборка всего воркспейса
 build:
@@ -75,13 +77,15 @@ release-cli:
 release-ui:
     # Build Tauri UI only if a Tauri config is present
     if [ -f apps/mgmt-ui/src-tauri/tauri.conf.json ] || [ -f apps/mgmt-ui/tauri.conf.json ] || [ -f apps/mgmt-ui/src-tauri/Tauri.toml ]; then \
-      if [ -f apps/mgmt-ui/package.json ]; then \
-        cd apps/mgmt-ui && pnpm i && pnpm tauri build; \
-      else \
-        echo "UI package.json missing in apps/mgmt-ui; skipping UI build"; \
-      fi; \
+    if [ -f apps/mgmt-ui/web/package.json ]; then \
+    pnpm --dir apps/mgmt-ui/web i; \
+    pnpm --dir apps/mgmt-ui/web build; \
+    pnpm --dir apps/mgmt-ui/web tauri build --config ../src-tauri/tauri.conf.json; \
     else \
-      echo "No Tauri config found; skipping UI build"; \
+    echo "UI package.json missing in apps/mgmt-ui/web; skipping UI build"; \
+    fi; \
+    else \
+    echo "No Tauri config found; skipping UI build"; \
     fi
 
 release-all: release-cli release-ui
@@ -89,11 +93,16 @@ release-all: release-cli release-ui
 
 # Windows-only UI build (PowerShell)
 release-ui-win:
+    # If not on Windows, just print a hint and return
     if [ "$(uname -s | tr '[:upper:]' '[:lower:]')" != "windows_nt" ] && [ -z "$WIN" ]; then \
       echo "Windows UI build is skipped on non-Windows; run 'just release-ui-win' in Windows PowerShell"; \
-      exit 0; \
+    else \
+      if command -v pwsh >/dev/null 2>&1; then \
+        pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1; \
+      else \
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1; \
+      fi; \
     fi
-    pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1
 
 # Package Windows artifacts to zip
 package-win:
