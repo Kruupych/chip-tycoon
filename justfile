@@ -93,18 +93,8 @@ release-all: release-cli release-ui
 
 # Windows-only UI build (PowerShell)
 release-ui-win:
-	# PowerShell syntax (windows-shell is configured above)
-	if ($env:OS -ne 'Windows_NT' -and -not $env:WIN) {
-	Write-Output "Windows UI build is skipped on non-Windows; run 'just release-ui-win' in Windows PowerShell"
-	}
-	else {
-	if (Get-Command pwsh -ErrorAction SilentlyContinue) {
-	& pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1
-	}
-	else {
-	& powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-ui.ps1
-	}
-	}
+	# PowerShell one-liner (executed via windows-shell)
+	if (Get-Command pwsh -ErrorAction SilentlyContinue) { & pwsh -NoProfile -ExecutionPolicy Bypass -File 'scripts/windows/build-ui.ps1' } else { & powershell -NoProfile -ExecutionPolicy Bypass -File 'scripts/windows/build-ui.ps1' }
 
 # Package Windows artifacts to zip
 package-win:
