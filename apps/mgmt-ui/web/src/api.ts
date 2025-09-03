@@ -110,6 +110,9 @@ export type SimStateDto = {
     }[];
     released: { tech_node: { 0: string } }[] | any[];
   };
+  ai_plan: PlanSummary;
+  config: { finance: any; product_cost: { usable_die_area_mm2: number; yield_overhead_frac: number } };
+  campaign?: { status: string; goals: { kind: string; desc: string; progress: number; deadline: string; done: boolean }[]; start: string; end: string; difficulty?: string } | null;
 };
 
 export type SimListsDto = {
