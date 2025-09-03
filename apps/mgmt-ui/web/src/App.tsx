@@ -5,12 +5,12 @@ import { t, getLang, setLang } from "./i18n";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
-export function App() {
+export function App({ client }: { client?: QueryClient }) {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError } = useAppStore();
   const [nav, setNav] = useState<"dashboard" | "tutorial" | "campaign" | "markets" | "rd" | "capacity" | "ai">(
     "dashboard"
   );
-  const [qc] = useState(() => new QueryClient());
+  const [qc] = useState(() => client ?? new QueryClient({ defaultOptions: { queries: { retry: 0, refetchOnWindowFocus: false } } }));
   return (
     <QueryClientProvider client={qc}>
       <InnerApp nav={nav} setNav={setNav} />
@@ -113,6 +113,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
           ].map(([k, label]) => (
             <div key={k}>
               <button
+                data-testid={`nav-${k}`}
                 onClick={() => setNav(k as any)}
                 style={{
                   background: nav === k ? "#eee" : "transparent",
@@ -127,10 +128,10 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
           ))}
         </div>
         <div style={{ marginTop: 16 }}>
-          <button disabled={loading || isBusy} onClick={() => tickMut.mutate()}>{t("btn_tick_month")}</button>
-          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>{t("btn_sim_quarter")}</button>
-          <button style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>{t("btn_sim_year")}</button>
-          <button style={{ marginLeft: 8 }} onClick={() => setShowSave(true)}>{t("btn_save_load")}</button>
+          <button data-testid="btn-tick" disabled={loading || isBusy} onClick={() => tickMut.mutate()}>{t("btn_tick_month")}</button>
+          <button data-testid="btn-quarter" style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => quarterMut.mutate()}>{t("btn_sim_quarter")}</button>
+          <button data-testid="btn-year" style={{ marginLeft: 8 }} disabled={loading || isBusy} onClick={() => yearMut.mutate()}>{t("btn_sim_year")}</button>
+          <button data-testid="btn-open-save" style={{ marginLeft: 8 }} onClick={() => setShowSave(true)}>{t("btn_save_load")}</button>
         </div>
       </div>
       <div style={{ flex: 1, padding: 16 }}>
@@ -264,7 +265,7 @@ function Campaign() {
     <div>
       <h2>{t("nav_campaign")}</h2>
       <div style={{ marginBottom: 8 }}>
-        <button disabled={isBusy} onClick={async () => { try { const dto = await simCampaignReset("1990s"); setStateDto(dto as any); showToast("Campaign reset"); } catch (e: any) { showToast("Reset failed: "+(e?.message ?? e)); } }}>Restart 1990s Campaign</button>
+        <button data-testid="btn-campaign-reset" disabled={isBusy} onClick={async () => { try { const dto = await simCampaignReset("1990s"); setStateDto(dto as any); showToast("Campaign reset"); } catch (e: any) { showToast("Reset failed: "+(e?.message ?? e)); } }}>Restart 1990s Campaign</button>
         <span style={{ marginLeft: 12 }}>
           {t("lbl_difficulty")}
           <select onChange={async (e) => { try { await simCampaignSetDifficulty(e.target.value); showToast("Difficulty set"); } catch (err: any) { showToast("Difficulty failed: "+(err?.message ?? err)); } }} defaultValue={camp?.difficulty ?? "normal"} style={{ marginLeft: 6 }}>
@@ -279,7 +280,7 @@ function Campaign() {
             <option value="json">JSON</option>
             <option value="parquet">Parquet</option>
           </select>
-          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await simExportCampaign(path, fmt); showToast(`Exported to ${path}`); } catch(e: any) { showToast("Export failed: "+(e?.message ?? e)); } }}>{t("btn_export_report")}</button>
+          <button data-testid="btn-export" style={{ marginLeft: 6 }} onClick={async ()=>{ try { await simExportCampaign(path, fmt); showToast(`Exported to ${path}`); } catch(e: any) { showToast("Export failed: "+(e?.message ?? e)); } }}>{t("btn_export_report")}</button>
         </span>
       </div>
       {camp ? (
@@ -322,7 +323,7 @@ function Markets({ onOverride }: { onOverride: (p: any) => void }) {
           onChange={(e) => setDelta(Number(e.target.value))}
           style={{ width: 100 }}
         />
-        <button disabled={useAppStore.getState().isBusy} title={`Min margin: ${cents(Math.round(unitCost*1.05))} · New ASP≈ ${cents(expected)}`} onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
+        <button data-testid="btn-price-apply" disabled={useAppStore.getState().isBusy} title={`Min margin: ${cents(Math.round(unitCost*1.05))} · New ASP≈ ${cents(expected)}`} onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
           Apply
         </button>
       </div>
@@ -341,14 +342,14 @@ function RD({ onOverride }: { onOverride: (p: any) => void }) {
       <div>
         <label>R&D Δ (cents/mo): </label>
         <input type="number" value={rd} onChange={(e) => setRd(Number(e.target.value))} />
-        <button disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ rd_delta_cents: rd })}>Apply</button>
+        <button data-testid="btn-rd-apply" disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ rd_delta_cents: rd })}>Apply</button>
       </div>
       <div style={{ marginTop: 12 }}>
         <label>Tech node: </label>
         <input value={tech} onChange={(e) => setTech(e.target.value)} />
         <label> Expedite </label>
-        <input type="checkbox" checked={expedite} onChange={(e) => setExpedite(e.target.checked)} />
-        <button disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } })}>Queue Tapeout</button>
+        <input data-testid="toggle-expedite" type="checkbox" checked={expedite} onChange={(e) => setExpedite(e.target.checked)} />
+        <button data-testid="btn-tapeout-queue" disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } })}>Queue Tapeout</button>
       </div>
     </div>
   );
@@ -366,7 +367,7 @@ function Capacity({ onOverride }: { onOverride: (p: any) => void }) {
         <input type="number" value={wpm} onChange={(e) => setWpm(Number(e.target.value))} />
         <label> Months: </label>
         <input type="number" value={months} onChange={(e) => setMonths(Number(e.target.value))} />
-        <button disabled={useAppStore.getState().isBusy} onClick={() => { if (wpm <= 0 || months <= 0) { alert("Enter positive numbers"); return; } onOverride({ capacity_request: { wafers_per_month: wpm, months } }); }}>Request</button>
+        <button data-testid="btn-capacity-request" disabled={useAppStore.getState().isBusy} onClick={() => { if (wpm <= 0 || months <= 0) { alert("Enter positive numbers"); return; } onOverride({ capacity_request: { wafers_per_month: wpm, months } }); }}>Request</button>
       </div>
     </div>
   );
@@ -379,7 +380,7 @@ function AIPlan({ onQuarter, onOverride }: { onQuarter: () => void; onOverride: 
     <div>
       <h2>AI Plan</h2>
       <div style={{ marginBottom: 8 }}>
-        <button onClick={onQuarter}>Simulate Quarter</button>
+        <button data-testid="btn-ai-quarter" onClick={onQuarter}>Simulate Quarter</button>
       </div>
       {plan && (
         <div>
@@ -389,7 +390,7 @@ function AIPlan({ onQuarter, onOverride }: { onQuarter: () => void; onOverride: 
               <li key={i}>{d}</li>
             ))}
           </ul>
-          <button onClick={() => {
+          <button data-testid="btn-ai-apply" onClick={() => {
             // heuristic mapping: if decision starts with ASP, apply price; if Capacity, add capacity; if Tapeout, schedule tapeout
             const top = plan.decisions[0] || "";
             if (top.startsWith("ASP")) {
@@ -565,20 +566,20 @@ function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
         <div style={{ marginBottom: 8 }}>
           <label>Name: </label>
           <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="manual-..." />
-          <button style={{ marginLeft: 8 }} onClick={async ()=>{ try { await simSave(name); const list = await simListSaves(); setSaves(list as any); } catch(e) { console.error(e);} }}>Save</button>
+          <button data-testid="btn-save" style={{ marginLeft: 8 }} onClick={async ()=>{ try { await simSave(name); const list = await simListSaves(); setSaves(list as any); } catch(e) { console.error(e);} }}>Save</button>
           <label style={{ marginLeft: 16 }}>
-            <input type="checkbox" checked={autosave} onChange={(e)=>setAutosave(e.target.checked)} /> Autosave per quarter
+            <input data-testid="toggle-autosave" type="checkbox" checked={autosave} onChange={(e)=>setAutosave(e.target.checked)} /> Autosave per quarter
           </label>
         </div>
         <table style={{ width: "100%" }}>
           <thead><tr><th align="left">Name</th><th>Created</th><th>Progress</th><th></th></tr></thead>
           <tbody>
             {saves.map(s => (
-              <tr key={s.id}>
+              <tr key={s.id} data-testid="row-save" data-id={s.id}>
                 <td>{s.name}</td>
                 <td>{s.created_at}</td>
                 <td align="center">{s.progress}</td>
-                <td align="right"><button onClick={async ()=>{ try { await simLoad(s.id); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
+                <td align="right"><button data-testid="btn-load" onClick={async ()=>{ try { await simLoad(s.id); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
               </tr>
             ))}
           </tbody>

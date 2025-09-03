@@ -1,4 +1,4 @@
-import create from "zustand";
+import { create } from "zustand";
 import { SimSnapshot, SimStateDto, SimListsDto } from "./api";
 
 type State = {
@@ -19,11 +19,15 @@ type State = {
   setLists: (l: SimListsDto) => void;
 };
 
-export const useAppStore = create<State>((set) => ({
+const initial = () => ({
   snapshot: undefined,
   history: [],
   loading: false,
   isBusy: false,
+} as State);
+
+export const useAppStore = create<State>((set) => ({
+  ...initial(),
   setSnapshot: (s) => set((st) => ({ snapshot: s, history: [...st.history, s] })),
   setLoading: (b) => set({ loading: b }),
   setBusy: (b) => set({ isBusy: b }),
@@ -32,3 +36,16 @@ export const useAppStore = create<State>((set) => ({
   setStateDto: (s) => set({ stateDto: s }),
   setLists: (l) => set({ lists: l }),
 }));
+
+export function resetAppStore() {
+  useAppStore.setState({
+    ...initial(),
+    setSnapshot: useAppStore.getState().setSnapshot,
+    setLoading: useAppStore.getState().setLoading,
+    setBusy: useAppStore.getState().setBusy,
+    setError: useAppStore.getState().setError,
+    showToast: useAppStore.getState().showToast,
+    setStateDto: useAppStore.getState().setStateDto,
+    setLists: useAppStore.getState().setLists,
+  });
+}

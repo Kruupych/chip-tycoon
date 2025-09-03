@@ -1,96 +1,96 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { App } from '../App'
-
+import { QueryClient } from '@tanstack/react-query'
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
-import { invoke as invokeMock } from '@tauri-apps/api/core'
-
-;(invokeMock as any).mockImplementation(async (cmd: string, payload?: any) => {
-  switch (cmd) {
-    case 'sim_state':
-      return {
-        date: '1990-01-01',
-        month_index: 0,
-        companies: [{ name: 'A', cash_cents: 1000000, debt_cents: 0 }],
-        segments: [{ name: 'Seg', base_demand_units: 1000, price_elasticity: -1.2, base_demand_t: 1000, ref_price_t_cents: 30000, elasticity: -1.2, trend_pct: 8.0, sold_units: 800 }],
-        pricing: { asp_cents: 30000, unit_cost_cents: 20000 },
-        kpi: { cash_cents: 1000000, revenue_cents: 0, cogs_cents: 0, contract_costs_cents: 0, profit_cents: 0, share: 0.2, rd_pct: 0.1, output_units: 1000, inventory_units: 950 },
-        contracts: [],
-        pipeline: { queue: [], released: [] },
-        ai_plan: { decisions: ['ASP-5%'], expected_score: 0.5 },
-        config: { finance: {}, product_cost: { usable_die_area_mm2: 6200, yield_overhead_frac: 0.05 } },
-        campaign: null,
-      };
-    case 'sim_lists':
-      return { tech_nodes: ['N90'], foundries: [], segments: ['Seg'] };
-    case 'sim_tutorial_state':
-      return { active: false, current_step: 0, steps: [] };
-    case 'sim_build_info':
-      return { version: '0.1.0', git_sha: 'deadbeef', build_date: 'today' };
-    case 'sim_plan_quarter':
-      return { decisions: ['ASP-5%', 'Capacity+1000u/mo'], expected_score: 0.42 };
-    case 'sim_override':
-    case 'sim_tick':
-    case 'sim_tick_quarter':
-    case 'sim_save':
-    case 'sim_list_saves':
-    case 'sim_load':
-    case 'sim_set_autosave':
-      return {} as any;
-    default:
-      return {} as any;
-  }
-})
+import { getInvokeMock, setupIpcMock, resetIpcMockState } from '../tests/mocks/ipc'
 
 describe('IPC wiring', () => {
   beforeEach(() => {
-    invokeMock.mockClear()
+    resetIpcMockState();
+    setupIpcMock();
+    (getInvokeMock() as any).mockClear();
   })
 
   it('Markets: applies price delta via sim_override', async () => {
-    render(<App />)
-    fireEvent.click(await screen.findByText('Markets'))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(await screen.findByTestId('nav-markets'))
     const input = await screen.findByDisplayValue('0')
     fireEvent.change(input, { target: { value: '5' } })
-    fireEvent.click(screen.getByText('Apply'))
-    expect(invokeMock).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ price_delta_frac: 0.05 }) })
+    fireEvent.click(screen.getByTestId('btn-price-apply'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ price_delta_frac: 0.05 }) })
+    })
   })
 
   it('R&D: adjusts budget via sim_override', async () => {
-    render(<App />)
-    fireEvent.click(await screen.findByText('R&D / Tapeout'))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(await screen.findByTestId('nav-rd'))
     const input = screen.getAllByRole('spinbutton')[0]
     fireEvent.change(input, { target: { value: '1234' } })
-    fireEvent.click(screen.getByText('Apply'))
-    expect(invokeMock).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ rd_delta_cents: 1234 }) })
+    fireEvent.click(screen.getByTestId('btn-rd-apply'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ rd_delta_cents: 1234 }) })
+    })
   })
 
   it('Capacity: requests contract via sim_override', async () => {
-    render(<App />)
-    fireEvent.click(await screen.findByText('Capacity'))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(await screen.findByTestId('nav-capacity'))
     const inputs = screen.getAllByRole('spinbutton')
     fireEvent.change(inputs[0], { target: { value: '2000' } })
     fireEvent.change(inputs[1], { target: { value: '6' } })
-    fireEvent.click(screen.getByText('Request'))
-    expect(invokeMock).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ capacity_request: { wafers_per_month: 2000, months: 6 } }) })
+    fireEvent.click(screen.getByTestId('btn-capacity-request'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ capacity_request: { wafers_per_month: 2000, months: 6 } }) })
+    })
   })
 
   it('AI Plan: applies top decision via sim_override', async () => {
-    render(<App />)
-    fireEvent.click(await screen.findByText('AI Plan'))
-    const btn = await screen.findByText('Apply Top Decision')
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(await screen.findByTestId('nav-ai'))
+    const btn = await screen.findByTestId('btn-ai-apply')
     fireEvent.click(btn)
-    expect(invokeMock).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ price_delta_frac: expect.any(Number) }) })
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_override', { ovr: expect.objectContaining({ price_delta_frac: expect.any(Number) }) })
+    })
   })
 
-  it.skip('Save/Load: saves game and lists saves', async () => {
-    render(<App />)
-    fireEvent.click(screen.getByText(/Save\/Load/))
+  it('Campaign: reset and export JSON', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(await screen.findByTestId('nav-campaign'))
+    fireEvent.click(await screen.findByTestId('btn-campaign-reset'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_campaign_reset', { which: '1990s' })
+    })
+    fireEvent.click(await screen.findByTestId('btn-export'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_export_campaign', expect.objectContaining({ path: expect.any(String) }))
+    })
+  })
+
+  it('Save/Load: saves and loads, refetches state', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    fireEvent.click(screen.getByTestId('btn-open-save'))
     const name = await screen.findByPlaceholderText('manual-...')
     fireEvent.change(name, { target: { value: 'manual-1' } })
-    fireEvent.click(screen.getByText('Save'))
-    expect(invokeMock).toHaveBeenCalledWith('sim_save', { name: 'manual-1' })
-    expect(invokeMock).toHaveBeenCalledWith('sim_list_saves')
+    fireEvent.click(screen.getByTestId('btn-save'))
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_save', { name: 'manual-1' })
+    })
+    // wait for row to appear and click load
+    const row = await screen.findByTestId('row-save')
+    const loadBtn = within(row).getByTestId('btn-load')
+    fireEvent.click(loadBtn)
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_load', { save_id: expect.any(Number) })
+    })
   })
 })

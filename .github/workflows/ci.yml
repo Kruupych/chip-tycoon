@@ -12,6 +12,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -26,6 +34,18 @@ jobs:
         run: just lint
       - name: Test
         run: just test
+      - name: Frontend tests (vitest jsdom)
+        run: |
+          cd apps/mgmt-ui/web
+          pnpm i
+          pnpm vitest run --environment jsdom
+      - name: Guard against skipped tests
+        run: |
+          if rg -n "(it|describe)\\.skip\(" apps/mgmt-ui/web/src --glob "*.test.tsx" -S; then \
+            echo "Found skipped tests" >&2; exit 1; \
+          else \
+            echo "No skipped tests"; \
+          fi
       - name: Build
         run: just build
       - name: Commit message guard
@@ -34,5 +54,24 @@ jobs:
           echo "Last commit: $MSG"
           if ! echo "$MSG" | grep -Eq '^(feat|fix|chore|docs|test|refactor|perf|ci)(\([\w\-]+\))?: .+'; then
             echo "Commit message does not follow conventional format" >&2
-            exit 1
+          exit 1
           fi
+
+  web-tests-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Install and run vitest (jsdom)
+        run: |
+          cd apps/mgmt-ui/web
+          pnpm i
+          pnpm vitest run --environment jsdom

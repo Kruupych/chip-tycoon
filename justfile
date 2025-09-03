@@ -8,6 +8,8 @@ build:
 # Прогон всех тестов
 test:
     cargo test --workspace --all-features
+    # UI tests (vitest)
+    just test-ui
 
 # Линтеры и автоформатирование
 lint:
