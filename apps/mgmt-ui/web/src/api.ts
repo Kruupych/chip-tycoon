@@ -1,5 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// Unified, safe IPC invoker with robust error reporting
+export async function invokeSafe<T>(cmd: string, payload?: Record<string, any>): Promise<T> {
+  try {
+    // Support optional global injection for tests/manual runs
+    const anyWin = (window as any);
+    const inv: typeof invoke = anyWin?.__tauriInvoke ?? invoke;
+    return (await inv(cmd, payload)) as T;
+  } catch (err: any) {
+    const msg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
+    // Always log details for devtools
+    console.error({ cmd, payload, error: err });
+    // Normalize to Error for UI
+    throw new Error(`IPC ${cmd} failed: ${msg}`);
+  }
+}
+
 export type SimSnapshot = {
   months_run: number;
   cash_cents: number;
@@ -19,11 +35,15 @@ export type SimSnapshot = {
 export type PlanSummary = { decisions: string[]; expected_score: number };
 
 export async function simTick(months: number) {
-  return invoke<SimSnapshot>("sim_tick", { months });
+  return invokeSafe<SimSnapshot>("sim_tick", { months });
 }
 
 export async function simPlanQuarter() {
-  return invoke<PlanSummary>("sim_plan_quarter");
+  return invokeSafe<PlanSummary>("sim_plan_quarter");
+}
+
+export async function simTickQuarter() {
+  return invokeSafe<SimSnapshot>("sim_tick_quarter");
 }
 
 export type OverrideReq = {
@@ -51,7 +71,7 @@ export type OverrideResp = {
 };
 
 export async function simOverride(payload: OverrideReq) {
-  return invoke<OverrideResp>("sim_override", { ovr: payload });
+  return invokeSafe<OverrideResp>("sim_override", { ovr: payload });
 }
 
 export type SimStateDto = {
@@ -99,23 +119,23 @@ export type SimListsDto = {
 };
 
 export async function getSimState() {
-  return invoke<SimStateDto>("sim_state");
+  return invokeSafe<SimStateDto>("sim_state");
 }
 
 export async function getSimLists() {
-  return invoke<SimListsDto>("sim_lists");
+  return invokeSafe<SimListsDto>("sim_lists");
 }
 
 export type CampaignDto = { status: string; goals: { kind: string; desc: string; progress: number; deadline: string; done: boolean }[]; start: string; end: string };
 export async function simCampaignReset(which?: string) {
-  return invoke("sim_campaign_reset", { which });
+  return invokeSafe("sim_campaign_reset", { which });
 }
 export type BalanceInfo = { segments: SimStateDto["segments"]; active_mods: { id: string; kind: string; target: string; start: string; end: string }[] };
 export async function simBalanceInfo() {
-  return invoke<BalanceInfo>("sim_balance_info");
+  return invokeSafe<BalanceInfo>("sim_balance_info");
 }
 export async function simCampaignSetDifficulty(level: string) {
-  return invoke("sim_campaign_set_difficulty", { level });
+  return invokeSafe("sim_campaign_set_difficulty", { level });
 }
 
 export type TutorialDto = {
@@ -124,10 +144,33 @@ export type TutorialDto = {
   steps: { id: string; desc: string; hint: string; nav_page: string; nav_label: string; done: boolean }[];
 };
 export async function simTutorialState() {
-  return invoke<TutorialDto>("sim_tutorial_state");
+  return invokeSafe<TutorialDto>("sim_tutorial_state");
 }
 
 export type BuildInfo = { version: string; git_sha: string; build_date: string };
 export async function simBuildInfo() {
-  return invoke<BuildInfo>("sim_build_info");
+  return invokeSafe<BuildInfo>("sim_build_info");
+}
+
+// Save/Load and export helpers
+export async function simSave(name?: string) {
+  return invokeSafe<number>("sim_save", { name });
+}
+
+export type SaveInfo = { id: number; name: string; status?: string; created_at: string; progress: number };
+export async function simListSaves() {
+  return invokeSafe<SaveInfo[]>("sim_list_saves");
+}
+
+export async function simLoad(save_id: number) {
+  // Note param name is snake_case per backend signature
+  return invokeSafe<SimStateDto>("sim_load", { save_id });
+}
+
+export async function simSetAutosave(on: boolean) {
+  return invokeSafe<{ enabled: boolean; max_kept: number }>("sim_set_autosave", { on });
+}
+
+export async function simExportCampaign(path: string, format?: "json" | "parquet") {
+  return invokeSafe<void>("sim_export_campaign", { path, format });
 }

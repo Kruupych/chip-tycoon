@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto, simBuildInfo, BuildInfo } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto, simBuildInfo, BuildInfo, simTickQuarter, simListSaves, simSetAutosave, simSave, simLoad, simExportCampaign } from "./api";
 import { t, getLang, setLang } from "./i18n";
-import { invoke } from "@tauri-apps/api/core";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
@@ -58,7 +57,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onSettled: () => setBusy(false),
   });
   const quarterMut = useMutation({
-    mutationFn: async () => (window as any).__tauriInvoke?.("sim_tick_quarter") ?? (await import("@tauri-apps/api/core")).invoke("sim_tick_quarter"),
+    mutationFn: async () => simTickQuarter(),
     onMutate: () => setBusy(true),
     onSuccess: async () => {
       await refetchState();
@@ -270,7 +269,7 @@ function Campaign() {
             <option value="json">JSON</option>
             <option value="parquet">Parquet</option>
           </select>
-          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await invoke("sim_export_campaign", { path, format: fmt }); showToast(`Exported to ${path}`); } catch(e) { showToast("Export failed: "+e); } }}>{t("btn_export_report")}</button>
+          <button style={{ marginLeft: 6 }} onClick={async ()=>{ try { await simExportCampaign(path, fmt); showToast(`Exported to ${path}`); } catch(e: any) { showToast("Export failed: "+(e?.message ?? e)); } }}>{t("btn_export_report")}</button>
         </span>
       </div>
       {camp ? (
@@ -544,8 +543,8 @@ function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
   const [saves, setSaves] = useState<{ id: number; name: string; created_at: string; progress: number }[]>([]);
   const [name, setName] = useState("");
   const [autosave, setAutosave] = useState(true);
-  useEffect(() => { (async () => { try { const list = await invoke<any[]>("sim_list_saves"); setSaves(list as any); } catch {} })(); }, []);
-  useEffect(() => { (async () => { try { await invoke("sim_set_autosave", { on: autosave }); } catch {} })(); }, [autosave]);
+  useEffect(() => { (async () => { try { const list = await simListSaves(); setSaves(list as any); } catch (e) { console.error(e); } })(); }, []);
+  useEffect(() => { (async () => { try { await simSetAutosave(autosave); } catch (e) { console.error(e); } })(); }, [autosave]);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "white", padding: 16, borderRadius: 8, width: 600 }}>
@@ -556,7 +555,7 @@ function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
         <div style={{ marginBottom: 8 }}>
           <label>Name: </label>
           <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="manual-..." />
-          <button style={{ marginLeft: 8 }} onClick={async ()=>{ try { await invoke("sim_save", { name }); const list = await invoke<any[]>("sim_list_saves"); setSaves(list as any); } catch(e) { console.error(e);} }}>Save</button>
+          <button style={{ marginLeft: 8 }} onClick={async ()=>{ try { await simSave(name); const list = await simListSaves(); setSaves(list as any); } catch(e) { console.error(e);} }}>Save</button>
           <label style={{ marginLeft: 16 }}>
             <input type="checkbox" checked={autosave} onChange={(e)=>setAutosave(e.target.checked)} /> Autosave per quarter
           </label>
@@ -569,7 +568,7 @@ function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
                 <td>{s.name}</td>
                 <td>{s.created_at}</td>
                 <td align="center">{s.progress}</td>
-                <td align="right"><button onClick={async ()=>{ try { await invoke("sim_load", { saveId: s.id }); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
+                <td align="right"><button onClick={async ()=>{ try { await simLoad(s.id); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
               </tr>
             ))}
           </tbody>
