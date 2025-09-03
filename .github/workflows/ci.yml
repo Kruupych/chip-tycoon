@@ -12,14 +12,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: 'pnpm'
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -34,11 +39,12 @@ jobs:
         run: just lint
       - name: Test
         run: just test
+      - name: Frontend deps (pnpm)
+        run: pnpm install --frozen-lockfile=false
+        working-directory: apps/mgmt-ui/web
       - name: Frontend tests (vitest jsdom)
-        run: |
-          cd apps/mgmt-ui/web
-          pnpm i
-          pnpm vitest run --environment jsdom
+        run: pnpm vitest run --environment jsdom
+        working-directory: apps/mgmt-ui/web
       - name: Guard against skipped tests
         run: |
           if rg -n "(it|describe)\\.skip\(" apps/mgmt-ui/web/src --glob "*.test.tsx" -S; then \
@@ -65,13 +71,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: 'pnpm'
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
-      - name: Install and run vitest (jsdom)
-        run: |
-          cd apps/mgmt-ui/web
-          pnpm i
-          pnpm vitest run --environment jsdom
+          version: 10
+      - name: Install deps
+        run: pnpm install --frozen-lockfile=false
+        working-directory: apps/mgmt-ui/web
+      - name: Run vitest (jsdom)
+        run: pnpm vitest run --environment jsdom
+        working-directory: apps/mgmt-ui/web
