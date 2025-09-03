@@ -226,13 +226,23 @@ function TutorialHUD({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: str
 }
 
 function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: string) => void }) {
+  const qc = useQueryClient();
+  const loadTutorial = async () => {
+    try {
+      await simCampaignReset("tutorial_24m");
+      await qc.invalidateQueries({ queryKey: ["sim_state"] });
+      await qc.invalidateQueries({ queryKey: ["sim_tutorial"] });
+    } catch (e) {
+      console.error(e);
+    }
+  };
   return (
     <div>
       <h2>Tutorial</h2>
       {!tut?.active ? (
         <div>
-          <p>No tutorial loaded. You can load it via Campaign &rarr; Restart with tutorial scenario.</p>
-          <button onClick={() => simCampaignReset("assets/scenarios/tutorial_24m.yaml")}>Load Tutorial</button>
+          <p>No tutorial loaded. You can load it via Campaign → Restart with tutorial scenario.</p>
+          <button onClick={loadTutorial}>Load Tutorial</button>
         </div>
       ) : (
         <div>

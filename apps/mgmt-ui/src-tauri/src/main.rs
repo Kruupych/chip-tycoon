@@ -9,6 +9,7 @@ use sqlx::Row;
 use sim_core as core;
 use sim_runtime as runtime;
 use std::sync::{Arc, Mutex, RwLock};
+mod embedded;
 
 fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     yaml_text: &str,
@@ -20,8 +21,12 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     // Optionally persist schema under assets/schema
     let out_path = format!("assets/schema/{}.json", schema_name);
     if let Ok(s) = serde_json::to_string_pretty(&schema_json) {
-        let _ = std::fs::create_dir_all("assets/schema");
-        let _ = std::fs::write(&out_path, s);
+        // Best-effort in debug builds only; ignore errors in release runtime.
+        #[cfg(debug_assertions)]
+        {
+            let _ = std::fs::create_dir_all("assets/schema");
+            let _ = std::fs::write(&out_path, s);
+        }
     }
     // Parse YAML as JSON value
     let data_yaml: serde_yaml::Value =
@@ -66,6 +71,7 @@ struct PlanSummary {
 
 #[tauri::command]
 async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnapshot, String> {
+    tracing::info!(target: "ipc", months, "sim_tick");
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = app.run_on_main_thread(move || {
         let state = SIM_STATE.clone();
@@ -98,11 +104,13 @@ async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnap
         let _ = tx.send(res);
     });
     let snap = rx.recv().map_err(|e| e.to_string())??;
+    tracing::info!(target: "ipc", months_run = snap.months_run, "sim_tick: ok");
     Ok(snap)
 }
 
 #[tauri::command]
 async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot, String> {
+    tracing::info!(target: "ipc", "sim_tick_quarter");
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = app.run_on_main_thread(move || {
         let state = SIM_STATE.clone();
@@ -135,8 +143,18 @@ async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot,
                     let name = format!("auto-{}{:02}", date.year(), date.month());
                     let dom_clone = st.dom.clone();
                     let world_clone = runtime::clone_world_state(&st.world);
+                    // Resolve DB URL under AppData
+                    let db_url = match saves_db_url(&app) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            tracing::error!(target = "ipc", error = %e, "autosave: db url error");
+                            String::new()
+                        }
+                    };
                     tauri::async_runtime::spawn(async move {
-                        let _ = save_now(name, dom_clone, world_clone).await;
+                        if !db_url.is_empty() {
+                            let _ = save_now(db_url, name, dom_clone, world_clone).await;
+                        }
                     });
                 }
                 s3
@@ -151,6 +169,7 @@ async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot,
         let _ = tx.send(res);
     });
     let snap = rx.recv().map_err(|e| e.to_string())??;
+    tracing::info!(target: "ipc", months_run = snap.months_run, "sim_tick_quarter: ok");
     Ok(snap)
 }
 
@@ -750,10 +769,12 @@ fn build_campaign_dto(st: &SimState, sc: &CampaignScenario) -> DtoCampaign {
 
 #[tauri::command]
 fn sim_state() -> Result<SimStateDto, String> {
+    // If not initialized (e.g., packaged Windows without assets path), init from embedded defaults
+    if SIM_STATE.read().unwrap().is_none() {
+        let _ = init_default_from_embedded();
+    }
     let guard = SIM_STATE.read().unwrap();
-    let st = guard
-        .as_ref()
-        .ok_or_else(|| "sim not initialized".to_string())?;
+    let st = guard.as_ref().ok_or_else(|| "sim not initialized".to_string())?;
     Ok(build_sim_state_dto(st))
 }
 
@@ -839,13 +860,23 @@ fn sim_balance_info() -> Result<BalanceInfoDto, String> {
 
 #[tauri::command]
 fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
-    // Resolve scenario path
     let id = which.unwrap_or_else(|| "1990s".to_string());
-    let path = match id.as_str() {
-        "1990s" => "assets/scenarios/campaign_1990s.yaml".to_string(),
-        _ => id,
+    tracing::info!(target: "ipc", which = %id, "sim_campaign_reset");
+    // Resolve embedded scenario YAML
+    let text = match id.as_str() {
+        "1990s" => embedded::get_yaml("campaign_1990s").to_string(),
+        "tutorial_24m" => embedded::get_yaml("tutorial_24m").to_string(),
+        other => {
+            // Back-compat: allow raw names that contain campaign/tutorial ids
+            if other.contains("campaign_1990s") {
+                embedded::get_yaml("campaign_1990s").to_string()
+            } else if other.contains("tutorial_24m") {
+                embedded::get_yaml("tutorial_24m").to_string()
+            } else {
+                return Err("unknown scenario".into());
+            }
+        }
     };
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     // Validate scenario YAML
     validate_yaml::<CampaignScenario>(&text, "campaign")
         .map_err(|e| format!("campaign.yaml invalid: {e}"))?;
@@ -855,18 +886,15 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
         chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     let end =
         chrono::NaiveDate::parse_from_str(&sc.end_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
-    // Validate and load tech + markets assets
-    let tech_text =
-        std::fs::read_to_string("assets/data/tech_era_1990s.yaml").map_err(|e| e.to_string())?;
+    // Validate and load tech + markets assets from embedded
+    let tech_text = embedded::get_yaml("tech_era_1990s");
     validate_yaml::<TechRoot>(&tech_text, "tech_era")
         .map_err(|e| format!("tech_era_1990s.yaml invalid: {e}"))?;
-    let tech_nodes = load_tech_nodes("assets/data/tech_era_1990s.yaml");
-    let markets_text =
-        std::fs::read_to_string("assets/data/markets_1990s.yaml").map_err(|e| e.to_string())?;
+    let tech_nodes = load_tech_nodes_from_yaml(tech_text);
+    let markets_text = embedded::get_yaml("markets_1990s");
     validate_yaml::<MarketsRoot>(&markets_text, "markets")
         .map_err(|e| format!("markets_1990s.yaml invalid: {e}"))?;
-    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml")
-        .unwrap_or_default();
+    let markets = runtime::MarketConfigRes::from_yaml_str(markets_text).unwrap_or_default();
     let segments: Vec<core::MarketSegment> = markets
         .segments
         .iter()
@@ -900,13 +928,13 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
         },
     );
     world.insert_resource(markets);
-    // Load campaign events YAML
-    let ev_path = if sc.events_yaml.starts_with("/") || sc.events_yaml.starts_with(".") {
-        sc.events_yaml.clone()
+    // Load campaign events YAML from embedded by convention
+    let ev_cfg = if sc.events_yaml.contains("campaign_1990s") {
+        market_events_from_yaml_str(embedded::get_yaml("events_1990s"))
     } else {
-        format!("assets/events/{}", sc.events_yaml)
+        // Fallback to embedded 1990s events
+        market_events_from_yaml_str(embedded::get_yaml("events_1990s"))
     };
-    let ev_cfg = runtime::load_market_events_yaml(&ev_path);
     world.insert_resource(ev_cfg);
     // Inject campaign scenario into runtime for goal tracking
     let mut cfg = runtime::CampaignScenarioRes {
@@ -1009,7 +1037,9 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     // Return the new state
     let guard = SIM_STATE.read().unwrap();
     let st = guard.as_ref().unwrap();
-    Ok(build_sim_state_dto(st))
+    let dto = build_sim_state_dto(st);
+    tracing::info!(target: "ipc", date = %dto.date, "sim_campaign_reset: ok");
+    Ok(dto)
 }
 
 #[tauri::command]
@@ -1061,58 +1091,8 @@ fn sim_override(app: tauri::AppHandle, ovr: OverrideReq) -> Result<OverrideResp,
 }
 
 fn main() {
-    // Init a 1990s world on startup from assets
-    let date0 = chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
-    let tech_nodes = load_tech_nodes("assets/data/tech_era_1990s.yaml");
-    let markets = runtime::MarketConfigRes::from_yaml_file("assets/data/markets_1990s.yaml")
-        .unwrap_or_default();
-    let segments: Vec<core::MarketSegment> = markets
-        .segments
-        .iter()
-        .map(|s| core::MarketSegment {
-            name: s.name.clone(),
-            base_demand_units: s.base_demand_units_1990,
-            price_elasticity: s.elasticity,
-        })
-        .collect();
-    let dom = core::World {
-        macro_state: core::MacroState {
-            date: date0,
-            inflation_annual: 0.02,
-            interest_rate: 0.05,
-            fx_usd_index: 100.0,
-        },
-        tech_tree: tech_nodes,
-        companies: vec![core::Company {
-            name: "A".into(),
-            cash_usd: rust_decimal::Decimal::new(5_000_000, 0),
-            debt_usd: rust_decimal::Decimal::ZERO,
-            ip_portfolio: vec![],
-        }],
-        segments,
-    };
-    // Validate
-    let _ = core::validate_world(&dom).map_err(|e| e.to_string());
-    let mut ecs = runtime::init_world(
-        dom.clone(),
-        core::SimConfig {
-            tick_days: 30,
-            rng_seed: 42,
-        },
-    );
-    ecs.insert_resource(markets);
-    // Default campaign events for 1990s
-    ecs.insert_resource(runtime::load_market_events_yaml(
-        "assets/events/campaign_1990s.yaml",
-    ));
-    *SIM_STATE.write().unwrap() = Some(SimState {
-        world: ecs,
-        dom,
-        busy: false,
-        scenario: None,
-        tutorial: None,
-        autosave: true,
-    });
+    // Initialize default world from embedded to avoid filesystem dependencies.
+    let _ = init_default_from_embedded();
 
     tauri::Builder::<tauri::Wry>::default()
         .setup(|_app| {
@@ -1173,6 +1153,7 @@ fn sim_build_info() -> Result<BuildInfo, String> {
 
 #[tauri::command]
 fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
+    tracing::info!(target: "ipc", level = %level, "sim_campaign_set_difficulty");
     let mut g = SIM_STATE.write().unwrap();
     let st = g
         .as_mut()
@@ -1194,8 +1175,7 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
     struct Root {
         levels: std::collections::HashMap<String, Level>,
     }
-    let text =
-        std::fs::read_to_string("assets/scenarios/difficulty.yaml").map_err(|e| e.to_string())?;
+    let text = embedded::get_yaml("difficulty").to_string();
     // Validate difficulty before applying
     validate_yaml::<Root>(&text, "difficulty")
         .map_err(|e| format!("difficulty.yaml invalid: {e}"))?;
@@ -1248,10 +1228,11 @@ fn sim_campaign_set_difficulty(level: String) -> Result<(), String> {
             .unwrap_or(rust_decimal::Decimal::ONE);
         c.cash_usd = cash * m;
     }
+    tracing::info!(target: "ipc", "sim_campaign_set_difficulty: ok");
     Ok(())
 }
 
-fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
+fn load_tech_nodes_from_yaml(text: &str) -> Vec<core::TechNode> {
     #[derive(serde::Deserialize)]
     struct YNode {
         id: String,
@@ -1265,8 +1246,7 @@ fn load_tech_nodes(path: &str) -> Vec<core::TechNode> {
     struct Root {
         nodes: Vec<YNode>,
     }
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let root: Root = serde_yaml::from_str(&text).unwrap_or(Root { nodes: vec![] });
+    let root: Root = serde_yaml::from_str(text).unwrap_or(Root { nodes: vec![] });
     root.nodes
         .into_iter()
         .map(|n| core::TechNode {
@@ -1298,9 +1278,9 @@ struct SaveInfo {
     progress: u32,
 }
 
-async fn save_now(name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
+async fn save_now(db_url: String, name: String, dom: core::World, world: runtime::World) -> Result<i64, String> {
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url())
+    let pool = p::init_db(&db_url)
         .await
         .map_err(|e| e.to_string())?;
     // Autosave flow: mark in_progress first
@@ -1381,7 +1361,8 @@ async fn save_now(name: String, dom: core::World, world: runtime::World) -> Resu
 }
 
 #[tauri::command]
-async fn sim_save(name: Option<String>) -> Result<i64, String> {
+async fn sim_save(app: tauri::AppHandle, name: Option<String>) -> Result<i64, String> {
+    tracing::info!(target: "ipc", name = ?name, "sim_save");
     let (dom, world, nm) = {
         let g = SIM_STATE.read().unwrap();
         let st = g
@@ -1398,13 +1379,17 @@ async fn sim_save(name: Option<String>) -> Result<i64, String> {
         });
         (st.dom.clone(), runtime::clone_world_state(&st.world), nm)
     };
-    save_now(nm, dom, world).await
+    let url = saves_db_url(&app)?;
+    let id = save_now(url, nm.clone(), dom, world).await?;
+    tracing::info!(target: "ipc", id, "sim_save: ok");
+    Ok(id)
 }
 
 #[tauri::command]
-async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
+async fn sim_list_saves(app: tauri::AppHandle) -> Result<Vec<SaveInfo>, String> {
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url())
+    let url = saves_db_url(&app)?;
+    let pool = p::init_db(&url)
         .await
         .map_err(|e| e.to_string())?;
     // List saves by naive query since persistence doesn't expose it
@@ -1437,9 +1422,11 @@ async fn sim_list_saves() -> Result<Vec<SaveInfo>, String> {
 }
 
 #[tauri::command]
-async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
+async fn sim_load(app: tauri::AppHandle, save_id: i64) -> Result<SimStateDto, String> {
+    tracing::info!(target: "ipc", save_id, "sim_load");
     use persistence as p;
-    let pool = p::init_db(p::default_sqlite_url())
+    let url = saves_db_url(&app)?;
+    let pool = p::init_db(&url)
         .await
         .map_err(|e| e.to_string())?;
     let (_snap_id, _m, data, _fmt) = p::latest_snapshot(&pool, save_id)
@@ -1519,7 +1506,9 @@ async fn sim_load(save_id: i64) -> Result<SimStateDto, String> {
     }
     let g = SIM_STATE.read().unwrap();
     let st = g.as_ref().unwrap();
-    Ok(build_sim_state_dto(st))
+    let dto = build_sim_state_dto(st);
+    tracing::info!(target: "ipc", date = %dto.date, "sim_load: ok");
+    Ok(dto)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1543,6 +1532,7 @@ fn sim_set_autosave(on: bool) -> Result<AutosavePolicy, String> {
 
 #[tauri::command]
 fn sim_export_campaign(path: String, format: Option<String>) -> Result<(), String> {
+    tracing::info!(target: "ipc", path = %path, format = ?format, "sim_export_campaign");
     // Always perform a dry-run export: clone the current world and simulate on the clone.
     let g = SIM_STATE.read().unwrap();
     let st = g
@@ -1661,6 +1651,85 @@ fn sim_tutorial_state() -> Result<DtoTutorial, String> {
         current_step: tut.current_step_index,
         steps,
     })
+}
+
+// ------- Helpers: events from YAML, default init, saves path
+
+fn market_events_from_yaml_str(text: &str) -> runtime::MarketEventConfigRes {
+    #[derive(serde::Deserialize)]
+    struct Root {
+        events: Vec<serde_yaml::Value>,
+    }
+    let root: Root = serde_yaml::from_str(text).unwrap_or(Root { events: vec![] });
+    runtime::MarketEventConfigRes { events: root.events }
+}
+
+fn init_default_from_embedded() -> Result<(), String> {
+    let date0 = chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+    let tech_nodes = load_tech_nodes_from_yaml(embedded::get_yaml("tech_era_1990s"));
+    let markets = runtime::MarketConfigRes::from_yaml_str(embedded::get_yaml("markets_1990s"))
+        .unwrap_or_default();
+    let segments: Vec<core::MarketSegment> = markets
+        .segments
+        .iter()
+        .map(|s| core::MarketSegment {
+            name: s.name.clone(),
+            base_demand_units: s.base_demand_units_1990,
+            price_elasticity: s.elasticity,
+        })
+        .collect();
+    let dom = core::World {
+        macro_state: core::MacroState {
+            date: date0,
+            inflation_annual: 0.02,
+            interest_rate: 0.05,
+            fx_usd_index: 100.0,
+        },
+        tech_tree: tech_nodes,
+        companies: vec![core::Company {
+            name: "A".into(),
+            cash_usd: rust_decimal::Decimal::new(5_000_000, 0),
+            debt_usd: rust_decimal::Decimal::ZERO,
+            ip_portfolio: vec![],
+        }],
+        segments,
+    };
+    let _ = core::validate_world(&dom).map_err(|e| e.to_string());
+    let mut ecs = runtime::init_world(
+        dom.clone(),
+        core::SimConfig {
+            tick_days: 30,
+            rng_seed: 42,
+        },
+    );
+    ecs.insert_resource(markets);
+    ecs.insert_resource(market_events_from_yaml_str(embedded::get_yaml("events_1990s")));
+    *SIM_STATE.write().unwrap() = Some(SimState {
+        world: ecs,
+        dom,
+        busy: false,
+        scenario: None,
+        tutorial: None,
+        autosave: true,
+    });
+    Ok(())
+}
+
+fn saves_db_url(app: &tauri::AppHandle) -> Result<String, String> {
+    use tauri::path::BaseDirectory;
+    let p = app
+        .path()
+        .resolve("chip-tycoon/saves/main.db", BaseDirectory::AppData)
+        .map_err(|e| e.to_string())?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut s = p.to_string_lossy().to_string();
+    // Normalize path separators for sqlite URL on Windows
+    if cfg!(windows) {
+        s = s.replace('\\', "/");
+    }
+    Ok(format!("sqlite://{}", s))
 }
 
 #[cfg(test)]

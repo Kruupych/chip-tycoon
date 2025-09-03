@@ -75,6 +75,18 @@ describe('IPC wiring', () => {
     })
   })
 
+  it('Tutorial: Load Tutorial triggers sim_campaign_reset("tutorial_24m")', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
+    render(<App client={qc} />)
+    // navigate to Tutorial page
+    fireEvent.click(await screen.findByTestId('nav-tutorial'))
+    const btn = await screen.findByText('Load Tutorial')
+    fireEvent.click(btn)
+    await vi.waitFor(() => {
+      expect(getInvokeMock()).toHaveBeenCalledWith('sim_campaign_reset', { which: 'tutorial_24m' })
+    })
+  })
+
   it('Save/Load: saves and loads, refetches state', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: 0 } } })
     render(<App client={qc} />)
