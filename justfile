@@ -41,7 +41,7 @@ ci: guard-clean lint test build
 
 # Frontend tests (optional)
 test-ui:
-    cd apps/mgmt-ui/web && pnpm i && pnpm test
+    cd apps/mgmt-ui/web && pnpm i && pnpm vitest run --environment jsdom
 
 # Запуск Bevy-фронта (игры)
 run-game:
