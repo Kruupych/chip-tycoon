@@ -26,4 +26,4 @@ tauri-build = { version = "2", features = [] }
 base64 = "0.22"
 ico = "0.4"
 
-# Note: this crate is built standalone by Tauri; do not mark it as a workspace root.
+[workspace]
