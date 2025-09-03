@@ -65,95 +65,93 @@ struct PlanSummary {
 }
 
 #[tauri::command]
-async fn sim_tick(months: u32) -> Result<runtime::SimSnapshot, String> {
-    let state = SIM_STATE.clone();
-    let queue = TICK_QUEUE.clone();
-    let snap = tauri::async_runtime::spawn_blocking(move || {
-        let _q = queue.lock().unwrap();
-        // Check and set busy
-        {
-            let mut guard = state.write().unwrap();
-            let st = guard
-                .as_mut()
-                .ok_or_else(|| "sim not initialized".to_string())?;
-            if st.busy {
-                return Err("busy".to_string());
+async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnapshot, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let state = SIM_STATE.clone();
+        let queue = TICK_QUEUE.clone();
+        let res = (|| {
+            let _q = queue.lock().unwrap();
+            {
+                let mut guard = state.write().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| "sim not initialized".to_string())?;
+                if st.busy {
+                    return Err("busy".to_string());
+                }
+                st.busy = true;
             }
-            st.busy = true;
-        }
-        // Run the tick
-        let snap = {
-            let mut guard = state.write().unwrap();
-            let st = guard.as_mut().unwrap();
-            let (snap, _t) = runtime::run_months_in_place(&mut st.world, months);
-            snap
-        };
-        // Clear busy
-        {
-            let mut guard = state.write().unwrap();
-            let st = guard.as_mut().unwrap();
-            st.busy = false;
-        }
-        Ok::<_, String>(snap)
-    })
-    .await
-    .map_err(|e| format!("join error: {e}"))??;
-    Ok(snap)
+            let snap = {
+                let mut guard = state.write().unwrap();
+                let st = guard.as_mut().unwrap();
+                let (snap, _t) = runtime::run_months_in_place(&mut st.world, months);
+                snap
+            };
+            {
+                let mut guard = state.write().unwrap();
+                let st = guard.as_mut().unwrap();
+                st.busy = false;
+            }
+            Ok::<_, String>(snap)
+        })();
+        let _ = tx.send(res);
+    });
+    rx.recv().map_err(|e| e.to_string())??
+        .pipe(Ok)
 }
 
 #[tauri::command]
-async fn sim_tick_quarter() -> Result<runtime::SimSnapshot, String> {
-    let state = SIM_STATE.clone();
-    let queue = TICK_QUEUE.clone();
-    let snap = tauri::async_runtime::spawn_blocking(move || {
-        let _q = queue.lock().unwrap();
-        // Check and set busy
-        {
-            let mut guard = state.write().unwrap();
-            let st = guard
-                .as_mut()
-                .ok_or_else(|| "sim not initialized".to_string())?;
-            if st.busy {
-                return Err("busy".to_string());
+async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let state = SIM_STATE.clone();
+        let queue = TICK_QUEUE.clone();
+        let res = (|| {
+            let _q = queue.lock().unwrap();
+            {
+                let mut guard = state.write().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| "sim not initialized".to_string())?;
+                if st.busy {
+                    return Err("busy".to_string());
+                }
+                st.busy = true;
             }
-            st.busy = true;
-        }
-        // Run 3 ticks sequentially
-        let snap = {
-            let mut guard = state.write().unwrap();
-            let st = guard.as_mut().unwrap();
-            let (_s1, _t1) = runtime::run_months_in_place(&mut st.world, 1);
-            let (_s2, _t2) = runtime::run_months_in_place(&mut st.world, 1);
-            let (s3, _t3) = runtime::run_months_in_place(&mut st.world, 1);
-            // Autosave once per quarter if enabled
-            if st.autosave {
-                let date = st
-                    .world
-                    .resource::<runtime::DomainWorld>()
-                    .0
-                    .macro_state
-                    .date;
-                let name = format!("auto-{}{:02}", date.year(), date.month());
-                // Trigger background save
-                let dom_clone = st.dom.clone();
-                let world_clone = runtime::clone_world_state(&st.world);
-                tauri::async_runtime::spawn(async move {
-                    let _ = save_now(name, dom_clone, world_clone).await;
-                });
+            let snap = {
+                let mut guard = state.write().unwrap();
+                let st = guard.as_mut().unwrap();
+                let (_s1, _t1) = runtime::run_months_in_place(&mut st.world, 1);
+                let (_s2, _t2) = runtime::run_months_in_place(&mut st.world, 1);
+                let (s3, _t3) = runtime::run_months_in_place(&mut st.world, 1);
+                if st.autosave {
+                    let date = st
+                        .world
+                        .resource::<runtime::DomainWorld>()
+                        .0
+                        .macro_state
+                        .date;
+                    let name = format!("auto-{}{:02}", date.year(), date.month());
+                    let dom_clone = st.dom.clone();
+                    let world_clone = runtime::clone_world_state(&st.world);
+                    tauri::async_runtime::spawn(async move {
+                        let _ = save_now(name, dom_clone, world_clone).await;
+                    });
+                }
+                s3
+            };
+            {
+                let mut guard = state.write().unwrap();
+                let st = guard.as_mut().unwrap();
+                st.busy = false;
             }
-            s3
-        };
-        // Clear busy
-        {
-            let mut guard = state.write().unwrap();
-            let st = guard.as_mut().unwrap();
-            st.busy = false;
-        }
-        Ok::<_, String>(snap)
-    })
-    .await
-    .map_err(|e| format!("join error: {e}"))??;
-    Ok(snap)
+            Ok::<_, String>(snap)
+        })();
+        let _ = tx.send(res);
+    });
+    rx.recv().map_err(|e| e.to_string())??
+        .pipe(Ok)
 }
 
 #[tauri::command]
@@ -1015,43 +1013,51 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
 }
 
 #[tauri::command]
-fn sim_override(ovr: OverrideReq) -> Result<OverrideResp, String> {
-    let mut resp = OverrideResp::default();
-    let state = SIM_STATE.clone();
-    let mut guard = state.write().unwrap();
-    let st = guard
-        .as_mut()
-        .ok_or_else(|| "sim not initialized".to_string())?;
-    let world = &mut st.world;
-    if let Some(df) = ovr.price_delta_frac {
-        let asp = runtime::apply_price_delta(world, df);
-        resp.asp_cents = Some(persistence::decimal_to_cents_i64(asp).unwrap_or(0));
-    }
-    if let Some(d) = ovr.rd_delta_cents {
-        let b = runtime::apply_rd_delta(world, d);
-        resp.rd_budget_cents = Some(b);
-    }
-    if let Some(cap) = ovr.capacity_request {
-        let s = runtime::apply_capacity_request(
-            world,
-            cap.wafers_per_month,
-            cap.months,
-            cap.billing_cents_per_wafer,
-            cap.take_or_pay_frac,
-        );
-        resp.capacity_summary = Some(s);
-    }
-    if let Some(t) = ovr.tapeout {
-        let ready = runtime::apply_tapeout_request(
-            world,
-            t.perf_index,
-            t.die_area_mm2,
-            t.tech_node,
-            t.expedite.unwrap_or(false),
-        );
-        resp.tapeout_ready = Some(ready.to_string());
-    }
-    Ok(resp)
+fn sim_override(app: tauri::AppHandle, ovr: OverrideReq) -> Result<OverrideResp, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let mut resp = OverrideResp::default();
+        let state = SIM_STATE.clone();
+        let mut guard = state.write().unwrap();
+        let st = match guard.as_mut() {
+            Some(s) => s,
+            None => {
+                let _ = tx.send(Err("sim not initialized".into()));
+                return;
+            }
+        };
+        let world = &mut st.world;
+        if let Some(df) = ovr.price_delta_frac {
+            let asp = runtime::apply_price_delta(world, df);
+            resp.asp_cents = Some(persistence::decimal_to_cents_i64(asp).unwrap_or(0));
+        }
+        if let Some(d) = ovr.rd_delta_cents {
+            let b = runtime::apply_rd_delta(world, d);
+            resp.rd_budget_cents = Some(b);
+        }
+        if let Some(cap) = ovr.capacity_request {
+            let s = runtime::apply_capacity_request(
+                world,
+                cap.wafers_per_month,
+                cap.months,
+                cap.billing_cents_per_wafer,
+                cap.take_or_pay_frac,
+            );
+            resp.capacity_summary = Some(s);
+        }
+        if let Some(t) = ovr.tapeout {
+            let ready = runtime::apply_tapeout_request(
+                world,
+                t.perf_index,
+                t.die_area_mm2,
+                t.tech_node,
+                t.expedite.unwrap_or(false),
+            );
+            resp.tapeout_ready = Some(ready.to_string());
+        }
+        let _ = tx.send(Ok(resp));
+    });
+    rx.recv().map_err(|e| e.to_string())?
 }
 
 fn main() {
