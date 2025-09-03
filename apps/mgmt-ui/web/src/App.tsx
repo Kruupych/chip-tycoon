@@ -19,7 +19,7 @@ export function App() {
 }
 
 function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
-  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError, toast } = useAppStore();
+  const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError, toast, showToast } = useAppStore();
   const qc = useQueryClient();
   const [showSave, setShowSave] = useState(false);
   const [tut, setTut] = useState<TutorialDto | null>(null);
@@ -52,6 +52,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onSuccess: async (snap) => {
       setSnapshot(snap);
       await refetchState();
+      showToast("Ticked 1 month");
     },
     onError: (e: any) => setError(e?.toString?.() ?? String(e)),
     onSettled: () => setBusy(false),
@@ -61,6 +62,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onMutate: () => setBusy(true),
     onSuccess: async () => {
       await refetchState();
+      showToast("Simulated quarter");
     },
     onError: (e: any) => setError(e?.toString?.() ?? String(e)),
     onSettled: () => setBusy(false),
@@ -70,6 +72,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onMutate: () => setBusy(true),
     onSuccess: async () => {
       await refetchState();
+      showToast("Simulated year");
     },
     onError: (e: any) => setError(e?.toString?.() ?? String(e)),
     onSettled: () => setBusy(false),
@@ -79,6 +82,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
     onMutate: () => setBusy(true),
     onSuccess: async () => {
       await refetchState();
+      showToast("Applied");
     },
     onError: (e: any) => setError(e?.toString?.() ?? String(e)),
     onSettled: () => setBusy(false),
@@ -132,6 +136,12 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
       <div style={{ flex: 1, padding: 16 }}>
         {toast && (
           <div style={{ position: "fixed", top: 12, right: 12, background: "#16a34a", color: "#fff", padding: "8px 12px", borderRadius: 4 }}>{toast}</div>
+        )}
+        {/* Error banner */}
+        {useAppStore.getState().error && (
+          <div style={{ position: "fixed", top: 12, left: 240, right: 160, background: "#ef4444", color: "#fff", padding: "8px 12px", borderRadius: 4 }}>
+            {useAppStore.getState().error}
+          </div>
         )}
         <div style={{ marginBottom: 8, color: "#666" }}>
           {stateDto ? `Date ${stateDto.date} · Month #${stateDto.month_index}` : `Month #${snapshot?.months_run ?? 0}`}
@@ -246,7 +256,7 @@ function TutorialPage({ tut, onGoto }: { tut: TutorialDto | null; onGoto: (p: st
 }
 
 function Campaign() {
-  const { stateDto, showToast } = useAppStore();
+  const { stateDto, showToast, setStateDto, isBusy } = useAppStore();
   const camp = (stateDto as any)?.campaign as any;
   const [fmt, setFmt] = useState<"json"|"parquet">("json");
   const [path, setPath] = useState("telemetry/campaign_export.json");
@@ -254,10 +264,10 @@ function Campaign() {
     <div>
       <h2>{t("nav_campaign")}</h2>
       <div style={{ marginBottom: 8 }}>
-        <button onClick={() => simCampaignReset("1990s")}>Restart 1990s Campaign</button>
+        <button disabled={isBusy} onClick={async () => { try { const dto = await simCampaignReset("1990s"); setStateDto(dto as any); showToast("Campaign reset"); } catch (e: any) { showToast("Reset failed: "+(e?.message ?? e)); } }}>Restart 1990s Campaign</button>
         <span style={{ marginLeft: 12 }}>
           {t("lbl_difficulty")}
-          <select onChange={(e) => simCampaignSetDifficulty(e.target.value)} defaultValue={camp?.difficulty ?? "normal"} style={{ marginLeft: 6 }}>
+          <select onChange={async (e) => { try { await simCampaignSetDifficulty(e.target.value); showToast("Difficulty set"); } catch (err: any) { showToast("Difficulty failed: "+(err?.message ?? err)); } }} defaultValue={camp?.difficulty ?? "normal"} style={{ marginLeft: 6 }}>
             <option value="easy">Easy</option>
             <option value="normal">Normal</option>
             <option value="hard">Hard</option>
@@ -312,7 +322,7 @@ function Markets({ onOverride }: { onOverride: (p: any) => void }) {
           onChange={(e) => setDelta(Number(e.target.value))}
           style={{ width: 100 }}
         />
-        <button title={`Min margin: ${cents(Math.round(unitCost*1.05))} · New ASP≈ ${cents(expected)}`} onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
+        <button disabled={useAppStore.getState().isBusy} title={`Min margin: ${cents(Math.round(unitCost*1.05))} · New ASP≈ ${cents(expected)}`} onClick={async () => { onOverride({ price_delta_frac: delta / 100 }); }}>
           Apply
         </button>
       </div>
@@ -331,14 +341,14 @@ function RD({ onOverride }: { onOverride: (p: any) => void }) {
       <div>
         <label>R&D Δ (cents/mo): </label>
         <input type="number" value={rd} onChange={(e) => setRd(Number(e.target.value))} />
-        <button onClick={() => onOverride({ rd_delta_cents: rd })}>Apply</button>
+        <button disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ rd_delta_cents: rd })}>Apply</button>
       </div>
       <div style={{ marginTop: 12 }}>
         <label>Tech node: </label>
         <input value={tech} onChange={(e) => setTech(e.target.value)} />
         <label> Expedite </label>
         <input type="checkbox" checked={expedite} onChange={(e) => setExpedite(e.target.checked)} />
-        <button onClick={() => onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } })}>Queue Tapeout</button>
+        <button disabled={useAppStore.getState().isBusy} onClick={() => onOverride({ tapeout: { perf_index: 0.8, die_area_mm2: 100, tech_node: tech, expedite } })}>Queue Tapeout</button>
       </div>
     </div>
   );
@@ -356,7 +366,7 @@ function Capacity({ onOverride }: { onOverride: (p: any) => void }) {
         <input type="number" value={wpm} onChange={(e) => setWpm(Number(e.target.value))} />
         <label> Months: </label>
         <input type="number" value={months} onChange={(e) => setMonths(Number(e.target.value))} />
-        <button onClick={() => onOverride({ capacity_request: { wafers_per_month: wpm, months } })}>Request</button>
+        <button disabled={useAppStore.getState().isBusy} onClick={() => { if (wpm <= 0 || months <= 0) { alert("Enter positive numbers"); return; } onOverride({ capacity_request: { wafers_per_month: wpm, months } }); }}>Request</button>
       </div>
     </div>
   );
