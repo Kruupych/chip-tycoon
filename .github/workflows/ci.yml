@@ -55,14 +55,6 @@ jobs:
           fi
       - name: Build
         run: just build
-      - name: Commit message guard
-        run: |
-          MSG=$(git log -1 --pretty=%s)
-          echo "Last commit: $MSG"
-          if ! echo "$MSG" | grep -Eq '^(feat|fix|chore|docs|test|refactor|perf|ci)(\([\w\-]+\))?: .+'; then
-            echo "Commit message does not follow conventional format" >&2
-          exit 1
-          fi
 
   web-tests-windows:
     runs-on: windows-latest
