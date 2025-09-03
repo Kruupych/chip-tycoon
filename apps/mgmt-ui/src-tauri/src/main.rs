@@ -14,7 +14,7 @@ mod embedded;
 
 fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     yaml_text: &str,
-    schema_name: &str,
+    _schema_name: &str,
 ) -> Result<(), String> {
     // Build schema from type
     let schema = schemars::schema_for!(T);
@@ -24,7 +24,7 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     #[cfg(debug_assertions)]
     {
         if let Ok(s) = serde_json::to_string_pretty(&schema_json) {
-            let out_path = format!("assets/schema/{}.json", schema_name);
+            let out_path = format!("assets/schema/{}.json", _schema_name);
             let _ = std::fs::create_dir_all("assets/schema");
             let _ = std::fs::write(&out_path, s);
         }
@@ -112,6 +112,8 @@ async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnap
 #[tauri::command]
 async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot, String> {
     tracing::info!(target: "ipc", "sim_tick_quarter");
+    // Precompute autosave DB URL (to avoid borrowing `app` inside main-thread closure)
+    let db_url_opt = saves_db_url(&app).ok();
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = app.run_on_main_thread(move || {
         let state = SIM_STATE.clone();
@@ -144,19 +146,13 @@ async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot,
                     let name = format!("auto-{}{:02}", date.year(), date.month());
                     let dom_clone = st.dom.clone();
                     let world_clone = runtime::clone_world_state(&st.world);
-                    // Resolve DB URL under AppData
-                    let db_url = match saves_db_url(&app) {
-                        Ok(u) => u,
-                        Err(e) => {
-                            tracing::error!(target = "ipc", error = %e, "autosave: db url error");
-                            String::new()
-                        }
-                    };
-                    tauri::async_runtime::spawn(async move {
-                        if !db_url.is_empty() {
+                    if let Some(db_url) = db_url_opt.clone() {
+                        tauri::async_runtime::spawn(async move {
                             let _ = save_now(db_url, name, dom_clone, world_clone).await;
-                        }
-                    });
+                        });
+                    } else {
+                        tracing::error!(target: "ipc", "autosave: db url error");
+                    }
                 }
                 s3
             };
