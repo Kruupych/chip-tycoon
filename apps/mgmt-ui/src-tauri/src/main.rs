@@ -1109,9 +1109,10 @@ fn main() {
     });
 
     tauri::Builder::<tauri::Wry>::default()
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(debug_assertions)]
             {
+                let app = _app;
                 // Try to open devtools on startup in debug
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.open_devtools();
