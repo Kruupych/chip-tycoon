@@ -7,6 +7,7 @@ telemetry/
 crates/persistence/target/
 assets/generated/
 criterion/
+apps/mgmt-ui/src-tauri/gen/schemas/
 apps/mgmt-ui/web/node_modules/
 apps/mgmt-ui/web/dist/
 node_modules/
