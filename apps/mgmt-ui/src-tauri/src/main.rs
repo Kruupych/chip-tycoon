@@ -67,7 +67,7 @@ struct PlanSummary {
 #[tauri::command]
 async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnapshot, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
+    let _ = app.run_on_main_thread(move || {
         let state = SIM_STATE.clone();
         let queue = TICK_QUEUE.clone();
         let res = (|| {
@@ -104,7 +104,7 @@ async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnap
 #[tauri::command]
 async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
+    let _ = app.run_on_main_thread(move || {
         let state = SIM_STATE.clone();
         let queue = TICK_QUEUE.clone();
         let res = (|| {
@@ -1015,7 +1015,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
 #[tauri::command]
 fn sim_override(app: tauri::AppHandle, ovr: OverrideReq) -> Result<OverrideResp, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
+    let _ = app.run_on_main_thread(move || {
         let mut resp = OverrideResp::default();
         let state = SIM_STATE.clone();
         let mut guard = state.write().unwrap();
