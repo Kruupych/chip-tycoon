@@ -2747,6 +2747,7 @@ dependencies = [
  "sqlx",
  "tauri",
  "tauri-build",
+ "tracing",
 ]
 
 [[package]]

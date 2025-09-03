@@ -12,6 +12,45 @@ use sim_runtime as runtime;
 use std::sync::{Arc, Mutex, RwLock};
 mod embedded;
 
+fn coerce_json_numeric_strings(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(s) => {
+            // Match optional '-' then digits/underscores
+            let ss = s.as_str();
+            let is_num = ss
+                .chars()
+                .enumerate()
+                .all(|(i, c)| c.is_ascii_digit() || (i == 0 && c == '-') || c == '_');
+            if is_num && ss.chars().any(|c| c.is_ascii_digit()) {
+                let cleaned = ss.replace('_', "");
+                if let Ok(n) = cleaned.parse::<i64>() {
+                    return serde_json::Value::Number(serde_json::Number::from(n));
+                }
+            }
+            serde_json::Value::String(s)
+        }
+        serde_json::Value::Array(arr) => {
+            let vv = arr.into_iter().map(coerce_json_numeric_strings).collect();
+            serde_json::Value::Array(vv)
+        }
+        serde_json::Value::Object(mut map) => {
+            for (_k, v) in map.iter_mut() {
+                let nv = std::mem::replace(v, serde_json::Value::Null);
+                *v = coerce_json_numeric_strings(nv);
+            }
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn from_yaml_with_coerce<T: for<'de> Deserialize<'de>>(yaml_text: &str) -> Result<T, String> {
+    let yv: serde_yaml::Value = serde_yaml::from_str(yaml_text).map_err(|e| e.to_string())?;
+    let j = serde_json::to_value(yv).map_err(|e| e.to_string())?;
+    let j2 = coerce_json_numeric_strings(j);
+    serde_json::from_value::<T>(j2).map_err(|e| e.to_string())
+}
+
 fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     yaml_text: &str,
     _schema_name: &str,
@@ -33,6 +72,8 @@ fn validate_yaml<T: for<'de> Deserialize<'de> + JsonSchema>(
     let data_yaml: serde_yaml::Value =
         serde_yaml::from_str(yaml_text).map_err(|e| e.to_string())?;
     let data_json = serde_json::to_value(data_yaml).map_err(|e| e.to_string())?;
+    // Coerce numeric-looking strings with underscores into integers before validation
+    let data_json = coerce_json_numeric_strings(data_json);
     // Validate
     let compiled = jsonschema::JSONSchema::compile(&schema_json).map_err(|e| e.to_string())?;
     if let Err(errors) = compiled.validate(&data_json) {
@@ -429,6 +470,7 @@ struct TutorialNavCfg {
 struct CampaignScenario {
     start_date: String,
     end_date: String,
+    #[serde(deserialize_with = "de_underscore_int")]
     player_start_cash_cents: i64,
     #[allow(dead_code)]
     ai_companies: usize,
@@ -449,7 +491,7 @@ enum YamlGoal {
     #[serde(rename = "launch_node")]
     LaunchNode { node: String, deadline: String },
     #[serde(rename = "profit_target")]
-    ProfitTarget { profit_cents: i64, deadline: String },
+    ProfitTarget { #[serde(deserialize_with = "de_underscore_int")] profit_cents: i64, deadline: String },
     #[serde(rename = "survive_event")]
     SurviveEvent { event_id: String, deadline: String },
 }
@@ -458,7 +500,7 @@ enum YamlGoal {
 #[serde(tag = "type")]
 enum YamlFail {
     #[serde(rename = "cash_below")]
-    CashBelow { threshold_cents: i64 },
+    CashBelow { #[serde(deserialize_with = "de_underscore_int")] threshold_cents: i64 },
     #[serde(rename = "share_below")]
     ShareBelow {
         segment: String,
@@ -527,11 +569,50 @@ struct TechRoot {
 struct TechNodeSchema {
     id: String,
     year_available: i32,
+    #[serde(deserialize_with = "de_underscore_int")]
     wafer_cost_cents: i64,
     yield_baseline: f32,
+    #[serde(deserialize_with = "de_underscore_int")]
     mask_set_cost_cents: i64,
     #[serde(default)]
     deps: Option<Vec<String>>,
+}
+
+fn de_underscore_int<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = i64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "integer or string with underscores")
+        }
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v as i64)
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let cleaned = v.replace('_', "");
+            cleaned.parse::<i64>().map_err(E::custom)
+        }
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let cleaned = v.replace('_', "");
+            cleaned.parse::<i64>().map_err(E::custom)
+        }
+    }
+    deserializer.deserialize_any(V)
 }
 
 fn build_sim_state_dto(st: &SimState) -> SimStateDto {
@@ -877,7 +958,7 @@ fn sim_campaign_reset(which: Option<String>) -> Result<SimStateDto, String> {
     // Validate scenario YAML
     validate_yaml::<CampaignScenario>(&text, "campaign")
         .map_err(|e| format!("campaign.yaml invalid: {e}"))?;
-    let sc: CampaignScenario = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
+    let sc: CampaignScenario = from_yaml_with_coerce(&text)?;
     // Build new dom
     let start =
         chrono::NaiveDate::parse_from_str(&sc.start_date, "%Y-%m-%d").map_err(|e| e.to_string())?;
@@ -1126,7 +1207,8 @@ fn main() {
             sim_load,
             sim_set_autosave,
             sim_export_campaign,
-            sim_build_info
+            sim_build_info,
+            sim_help_markdown
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1146,6 +1228,13 @@ fn sim_build_info() -> Result<BuildInfo, String> {
         git_sha: option_env!("GIT_SHA").unwrap_or("unknown").to_string(),
         build_date: option_env!("BUILD_DATE").unwrap_or("").to_string(),
     })
+}
+
+#[tauri::command]
+fn sim_help_markdown() -> Result<String, String> {
+    // Ship a lightweight offline help bundled with the app
+    let md = include_str!("../../../../docs/user-guide.md");
+    Ok(md.to_string())
 }
 
 #[tauri::command]
@@ -2190,28 +2279,28 @@ mod tests {
     #[test]
     fn yaml_schema_validation_works() {
         // Valid markets
-        let markets = std::fs::read_to_string("assets/data/markets_1990s.yaml").expect("read");
+        let markets = embedded::get_yaml("markets_1990s").to_string();
         assert!(validate_yaml::<MarketsRoot>(&markets, "markets").is_ok());
         // Broken markets (id not string)
         let broken = "segments: [ { id: 123, name: A, base_demand_units_1990: 1, base_asp_cents_1990: 1, elasticity: -1.0, annual_growth_pct: 0.0 } ]";
         let err = validate_yaml::<MarketsRoot>(broken, "markets").unwrap_err();
         assert!(err.contains("/segments/0/id"), "err: {}", err);
         // Valid tech era
-        let tech = std::fs::read_to_string("assets/data/tech_era_1990s.yaml").expect("read");
+        let tech = embedded::get_yaml("tech_era_1990s").to_string();
         assert!(validate_yaml::<TechRoot>(&tech, "tech_era").is_ok());
         // Broken tech (year_available wrong type)
         let broken_t = "nodes: [ { id: N90, year_available: foo, wafer_cost_cents: 1, yield_baseline: 0.9, mask_set_cost_cents: 1 } ]";
         let err2 = validate_yaml::<TechRoot>(broken_t, "tech_era").unwrap_err();
         assert!(err2.contains("/nodes/0/year_available"), "err: {}", err2);
         // Valid campaign
-        let camp = std::fs::read_to_string("assets/scenarios/campaign_1990s.yaml").expect("read");
+        let camp = embedded::get_yaml("campaign_1990s").to_string();
         assert!(validate_yaml::<CampaignScenario>(&camp, "campaign").is_ok());
         // Broken campaign (missing start_date)
         let broken_c = "end_date: 2000-01-01";
         let err3 = validate_yaml::<CampaignScenario>(broken_c, "campaign").unwrap_err();
         assert!(err3.contains("/start_date"), "err: {}", err3);
         // Valid difficulty
-        let diff = std::fs::read_to_string("assets/scenarios/difficulty.yaml").expect("read");
+        let diff = embedded::get_yaml("difficulty").to_string();
         #[derive(serde::Deserialize, JsonSchema)]
         struct Level {
             cash_multiplier: f32,
@@ -2233,5 +2322,27 @@ mod tests {
             "err: {}",
             err4
         );
+    }
+
+    #[test]
+    fn yaml_schema_strings_with_underscores_are_coerced() {
+        // Campaign with quoted underscore-separated ints should pass
+        let y = r#"
+start_date: "1990-01-01"
+end_date: "1991-01-01"
+player_start_cash_cents: "500_000_000"
+ai_companies: 2
+goals: [ { type: profit_target, profit_cents: "-100_000_000", deadline: "1990-12-01" } ]
+fail_conditions: []
+events_yaml: "assets/events/campaign_1990s.yaml"
+"#;
+        assert!(validate_yaml::<CampaignScenario>(y, "campaign").is_ok());
+        let sc: CampaignScenario = from_yaml_with_coerce(y).expect("coerce parse");
+        assert_eq!(sc.player_start_cash_cents, 500_000_000);
+        if let YamlGoal::ProfitTarget { profit_cents, .. } = &sc.goals[0] {
+            assert_eq!(*profit_cents, -100_000_000);
+        } else {
+            panic!("wrong goal type");
+        }
     }
 }
