@@ -35,6 +35,8 @@ export function setupIpcMock() {
         return { active: false, current_step: 0, steps: [] }
       case 'sim_build_info':
         return { version: '0.1.0', git_sha: 'deadbeef', build_date: 'today' }
+      case 'sim_help_markdown':
+        return '# Help\n\nSome help text.'
       case 'sim_tick':
         monthIndex += (payload?.months ?? 1)
         return {
@@ -102,4 +104,3 @@ export function resetIpcMockState() {
   nextSaveId = 1
   autosave = true
 }
-

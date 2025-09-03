@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "./store";
-import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto, simBuildInfo, BuildInfo, simTickQuarter, simListSaves, simSetAutosave, simSave, simLoad, simExportCampaign } from "./api";
+import { simTick, simPlanQuarter, simOverride, getSimLists, getSimState, simCampaignReset, simBalanceInfo, simCampaignSetDifficulty, simTutorialState, TutorialDto, simBuildInfo, BuildInfo, simTickQuarter, simListSaves, simSetAutosave, simSave, simLoad, simExportCampaign, simHelpMarkdown } from "./api";
 import { t, getLang, setLang } from "./i18n";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LineChart as RLineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -18,10 +18,26 @@ export function App({ client }: { client?: QueryClient }) {
   );
 }
 
+function HelpModal({ text, onClose }: { text: string; onClose: ()=>void }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)' }}>
+      <div style={{ position: 'absolute', top: '10%', left: '10%', right: '10%', bottom: '10%', background: '#fff', padding: 16, overflow: 'auto', borderRadius: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Help</h3>
+          <button onClick={onClose}>Close</button>
+        </div>
+        <pre style={{ whiteSpace: 'pre-wrap' }}>{text}</pre>
+      </div>
+    </div>
+  )
+}
+
 function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
   const { snapshot, setSnapshot, loading, setLoading, stateDto, setStateDto, lists, setLists, isBusy, setBusy, setError, toast, showToast } = useAppStore();
   const qc = useQueryClient();
   const [showSave, setShowSave] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [helpText, setHelpText] = useState<string>("");
   const [tut, setTut] = useState<TutorialDto | null>(null);
   // Lists and state queries
   useQuery({
@@ -92,7 +108,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
       <div style={{ width: 220, borderRight: "1px solid #ddd", padding: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <h3>{t("app_title")}</h3>
-          <button title="Help" onClick={()=>window.open("docs/user-guide.md", "_blank")}>?</button>
+          <button title="Help" onClick={async ()=>{ try { const md = await simHelpMarkdown(); setHelpText(md); setShowHelp(true); } catch (e) { console.error(e);} }}>?</button>
           <select value={getLang()} onChange={(e)=>{ setLang(e.target.value as any); (window as any).location?.reload?.(); }}>
             <option value="en">EN</option>
             <option value="ru">RU</option>
@@ -156,6 +172,7 @@ function InnerApp({ nav, setNav }: { nav: any; setNav: (v: any) => void }) {
         {nav === "ai" && <AIPlan onQuarter={() => quarterMut.mutate()} onOverride={(p)=>overrideMut.mutate(p as any)} />}
       </div>
       {showSave && <SaveLoadModal onClose={()=>setShowSave(false)} />}
+      {showHelp && <HelpModal text={helpText} onClose={()=>setShowHelp(false)} />}
     </div>
   );
 }
@@ -562,6 +579,7 @@ function ActiveModsTable() {
 
 function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
   const [saves, setSaves] = useState<{ id: number; name: string; created_at: string; progress: number }[]>([]);
+  const qc = useQueryClient();
   const [name, setName] = useState("");
   const [autosave, setAutosave] = useState(true);
   useEffect(() => { (async () => { try { const list = await simListSaves(); setSaves(list as any); } catch (e) { console.error(e); } })(); }, []);
@@ -589,8 +607,8 @@ function SaveLoadModal({ onClose }: { onClose: ()=>void }) {
                 <td>{s.name}</td>
                 <td>{s.created_at}</td>
                 <td align="center">{s.progress}</td>
-                <td align="right"><button data-testid="btn-load" onClick={async ()=>{ try { await simLoad(s.id); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
-              </tr>
+                <td align="right"><button data-testid="btn-load" onClick={async ()=>{ try { await simLoad(s.id); await qc.invalidateQueries({ queryKey: ["sim_state"] }); await qc.invalidateQueries({ queryKey: ["sim_tutorial"] }); onClose(); } catch(e){ console.error(e); } }}>Load</button></td>
+            </tr>
             ))}
           </tbody>
         </table>

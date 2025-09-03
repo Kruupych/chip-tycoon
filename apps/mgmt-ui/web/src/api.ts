@@ -155,6 +155,10 @@ export async function simBuildInfo() {
   return invokeSafe<BuildInfo>("sim_build_info");
 }
 
+export async function simHelpMarkdown() {
+  return invokeSafe<string>("sim_help_markdown");
+}
+
 // Save/Load and export helpers
 export async function simSave(name?: string) {
   return invokeSafe<number>("sim_save", { name });
