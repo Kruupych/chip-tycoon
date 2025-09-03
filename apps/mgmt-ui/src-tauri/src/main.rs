@@ -97,8 +97,8 @@ async fn sim_tick(app: tauri::AppHandle, months: u32) -> Result<runtime::SimSnap
         })();
         let _ = tx.send(res);
     });
-    rx.recv().map_err(|e| e.to_string())??
-        .pipe(Ok)
+    let snap = rx.recv().map_err(|e| e.to_string())??;
+    Ok(snap)
 }
 
 #[tauri::command]
@@ -150,8 +150,8 @@ async fn sim_tick_quarter(app: tauri::AppHandle) -> Result<runtime::SimSnapshot,
         })();
         let _ = tx.send(res);
     });
-    rx.recv().map_err(|e| e.to_string())??
-        .pipe(Ok)
+    let snap = rx.recv().map_err(|e| e.to_string())??;
+    Ok(snap)
 }
 
 #[tauri::command]
