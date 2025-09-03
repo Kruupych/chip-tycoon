@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import './styles.css'
 
 // Dev-only global error logging to help surface IPC issues
 if (import.meta && (import.meta as any).env && (import.meta as any).env.DEV) {
