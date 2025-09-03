@@ -19,11 +19,11 @@ serde_yaml = "0.9"
 schemars = "0.8"
 jsonschema = "0.17"
 rust_decimal = { version = "1", features = ["serde"] }
-tracing = { workspace = true }
+tracing = "0.1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 base64 = "0.22"
 ico = "0.4"
 
-[workspace]
+# Note: this crate is built standalone by Tauri; do not mark it as a workspace root.
